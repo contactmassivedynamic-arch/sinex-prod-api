@@ -37,6 +37,7 @@ app.use('/api/production',   require('./routes/production'));
 app.use('/api/stocks',       require('./routes/stocks'));
 app.use('/api/tresorerie',   require('./routes/tresorerie'));
 app.use('/api/dashboard',    require('./routes/dashboard'));
+app.use('/api/atp',          require('./routes/atp'));
 app.use('/api/rapports',     require('./routes/rapports'));
 app.use('/api/referentiels', require('./routes/referentiels'));
 app.use('/api/import',       require('./routes/import'));
