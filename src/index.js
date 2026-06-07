@@ -47,7 +47,8 @@ app.get('/api/health', async (req, res) => {
     await pool.query('SELECT 1');
     res.json({ status: 'ok', db: 'connectée', env: process.env.NODE_ENV, timestamp: new Date() });
   } catch (err) {
-    res.status(503).json({ status: 'error', db: 'déconnectée', error: err.message });
+    console.error('[HEALTH] DB error:', err.message, err.code);
+    res.status(503).json({ status: 'error', db: 'déconnectée', error: err.message, code: err.code });
   }
 });
 
