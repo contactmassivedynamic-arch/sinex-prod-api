@@ -188,9 +188,18 @@ router.post('/', auth, async (req, res) => {
     await client.query('BEGIN');
     const { rows } = await client.query(
       `INSERT INTO productions_jour (date_production,jours_ouvres,saisi_par,statut,remarques)
-       VALUES ($1,$2,$3,'en_attente',$4) RETURNING id`,
+       VALUES ($1,$2,$3,'en_attente',$4)
+       ON CONFLICT (date_production) DO UPDATE SET
+         jours_ouvres=EXCLUDED.jours_ouvres,
+         remarques=EXCLUDED.remarques,
+         statut='en_attente',
+         modifie_le=NOW()
+       RETURNING id`,
       [date_production, jours_ouvres||1, req.user.id, remarques||'']
     );
+    // Supprimer les anciennes lignes si mise à jour
+    await client.query('DELETE FROM lignes_production WHERE production_id=$1', [rows[0].id]);
+    await client.query('DELETE FROM rebuts WHERE production_id=$1', [rows[0].id]);
     const prodId = rows[0].id;
 
     for (const prod of productions) {
