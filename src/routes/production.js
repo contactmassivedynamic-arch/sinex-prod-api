@@ -1,22 +1,14 @@
-const router = require('express').Router();
-const pool   = require('../db/pool');
-const auth   = require('../middleware/auth');
-const role   = require('../middleware/role');
+const router  = require('express').Router();
+const pool    = require('../db/pool');
+const auth    = require('../middleware/auth');
+const role    = require('../middleware/role');
+const { PRIX_PF, COMPO, calcConsommations, calcCAHT, calcCDHT, calcMarges } = require('../utils/formules');
 
-const DG = 'directeur_general';
+const DG  = 'directeur_general';
+const BTL = {C12:12, C24:24, F615:6, F605:6, F61:6, HILIO:30};
 
-const COMPO = {
-  C12:  {PREF_32G:12, BOUCH_VERT:12, ETI_15L:12,  CTN_15L:1,   pf:'PF_C12',  btl:12},
-  C24:  {PREF_17G:24, BOUCH_VERT:24, ETI_05L:24,  CTN_05L:1,   pf:'PF_C24',  btl:24},
-  F615: {PREF_32G:6,  BOUCH_VERT:6,  ETI_15L:6,   FILM_FAR_15:0.5, pf:'PF_F615', btl:6},
-  F605: {PREF_17G:6,  BOUCH_VERT:6,  ETI_05L:6,   FILM_FAR_05:0.5, pf:'PF_F605', btl:6},
-  F61:  {PREF_17G:6,  BOUCH_VERT:6,  ETI_1L:6,    FILM_FAR_05:0.5, pf:'PF_F61',  btl:6},
-  HILIO:{FILM_HILIO:1,PACK_SACHET:30,pf:'PF_HILIO',btl:0},
-};
-const PRIX = {C12:2116.10, C24:2033.90, F615:1032.00, F605:429.00, F61:1186.00, HILIO:169.00};
-const BTL  = {C12:12, C24:24, F615:6, F605:6, F61:6, HILIO:30};
-
-async function mettreAJourStocksATP(client, prodId, userId) {
+// Mise à jour automatique stocks + ATP après validation
+async function mettreAJourApresValidation(client, prodId, userId) {
   const {rows:lignes} = await client.query(
     `SELECT fp.code, lp.cartons_produits FROM lignes_production lp
      JOIN formats_produits fp ON fp.id=lp.format_id WHERE lp.production_id=$1`, [prodId]
@@ -27,53 +19,42 @@ async function mettreAJourStocksATP(client, prodId, userId) {
   const dateProd = prodRows[0]?.date_production;
   const mois = dateProd ? new Date(dateProd).toISOString().slice(0,7) : new Date().toISOString().slice(0,7);
 
-  const consommes = {};
-  let caRealise = 0;
-
+  // Construire productions {C12: qte, C24: qte, ...}
+  const productions = {};
   for (const ligne of lignes) {
-    const code = ligne.code;
-    const qty  = parseInt(ligne.cartons_produits)||0;
-    if (qty===0) continue;
-    const compo = COMPO[code];
-    if (!compo) continue;
-
-    caRealise += qty*(PRIX[code]||0);
-
-    // Consommations MP
-    for (const [art, qteUnit] of Object.entries(compo)) {
-      if (art==='pf'||art==='btl') continue;
-      if (!consommes[art]) consommes[art]=0;
-      consommes[art] += qty*qteUnit;
-    }
-
-    // Entrée produits finis
-    const pfCode = compo.pf;
-    if (pfCode) {
-      const {rows:pfRows} = await client.query(`SELECT id FROM stocks_articles WHERE code=$1`,[pfCode]);
-      if (pfRows[0]) {
-        await client.query(
-          `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
-           VALUES ($1,'entree',$2,$3,'Production validée - '||$4,$5)`,
-          [pfRows[0].id, qty, dateProd, code, userId]
-        );
-      }
-    }
+    productions[ligne.code] = parseInt(ligne.cartons_produits)||0;
   }
 
-  // Rebuts
-  const rebutMap = {
-    PREF_32G:rebuts.pref32||0, PREF_17G:rebuts.pref17||0,
-    BOUCH_VERT:rebuts.bouchons||0, CTN_15L:rebuts.ctn_c12||0,
-    CTN_05L:rebuts.ctn_c24||0, FILM_HILIO:rebuts.hilio_rebut||0, ETI_15L:rebuts.etiquettes||0,
+  // Rebuts par intrant
+  const rebutsIntrants = {
+    PREF_32G:   rebuts.pref32||0,
+    PREF_17G:   rebuts.pref17||0,
+    BOUCH_VERT: rebuts.bouchons||0,
+    CTN_15L:    rebuts.ctn_c12||0,
+    CTN_05L:    rebuts.ctn_c24||0,
+    FILM_HILIO: rebuts.hilio_rebut||0,
+    ETI_15L:    rebuts.etiquettes||0,
   };
-  for (const [art,qty] of Object.entries(rebutMap)) {
-    if (qty>0) { if(!consommes[art]) consommes[art]=0; consommes[art]+=qty; }
+
+  // Calculs avec les vraies formules
+  const caHT = calcCAHT(productions);
+  const cdHT = calcCDHT(productions, rebutsIntrants);
+  const { mbHT, tmbHT, bmfMt, fsMt, ammMt } = calcMarges(caHT, cdHT);
+
+  // Consommations théoriques
+  const conso = calcConsommations(productions);
+  // Ajouter rebuts
+  for (const [intrant, qte] of Object.entries(rebutsIntrants)) {
+    if (!conso[intrant]) conso[intrant] = 0;
+    conso[intrant] += parseFloat(qte)||0;
   }
 
-  // Sorties MP
-  for (const [artCode,qte] of Object.entries(consommes)) {
-    if (qte<=0) continue;
-    const {rows:artRows} = await client.query(`SELECT id FROM stocks_articles WHERE code=$1`,[artCode]);
+  // Sorties MP dans stocks
+  for (const [artCode, qte] of Object.entries(conso)) {
+    if (qte <= 0) continue;
+    const {rows:artRows} = await client.query(
+      `SELECT id FROM stocks_articles WHERE code=$1`, [artCode]
+    );
     if (!artRows[0]) continue;
     await client.query(
       `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
@@ -82,32 +63,47 @@ async function mettreAJourStocksATP(client, prodId, userId) {
     );
   }
 
-  // Mise à jour ATP
-  if (caRealise>0) {
-    const cdR=caRealise*0.65, mbR=caRealise-cdR, tmbR=mbR/caRealise;
+  // Entrées produits finis
+  const PF_CODES = {C12:'PF_C12',C24:'PF_C24',F615:'PF_F615',F605:'PF_F605',F61:'PF_F61',HILIO:'PF_HILIO'};
+  for (const [fmt, qte] of Object.entries(productions)) {
+    if (!qte||qte===0) continue;
+    const pfCode = PF_CODES[fmt];
+    if (!pfCode) continue;
+    const {rows:pfRows} = await client.query(`SELECT id FROM stocks_articles WHERE code=$1`,[pfCode]);
+    if (!pfRows[0]) continue;
+    await client.query(
+      `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+       VALUES ($1,'entree',$2,$3,$4,$5)`,
+      [pfRows[0].id, qte, dateProd, `Production validée — ${fmt}`, userId]
+    );
+  }
+
+  // Mise à jour ATP avec vraies formules
+  if (caHT > 0) {
     const {rows:atpRows} = await client.query(`SELECT * FROM atp WHERE periode=$1`,[mois]);
     if (atpRows[0]) {
-      const newCA = parseFloat(atpRows[0].real_ca_ht||0)+caRealise;
-      const newCD=newCA*0.65, newMB=newCA-newCD, newTMB=newMB/newCA;
-      const taux = atpRows[0].proj_ca_ht>0 ? newCA/atpRows[0].proj_ca_ht : 0;
-      const bmf=newMB*(0.15/0.35), fs=newMB*(0.1/0.35), amm=newMB*(0.1/0.35);
+      const newCA  = parseFloat(atpRows[0].real_ca_ht||0) + caHT;
+      const newCD  = parseFloat(atpRows[0].real_cd_ht||0) + cdHT;
+      const newMB  = newCA - newCD;
+      const newTMB = newCA > 0 ? newMB / newCA : 0;
+      const taux   = atpRows[0].proj_ca_ht > 0 ? newCA / atpRows[0].proj_ca_ht : 0;
+      const {bmfMt:bMt, fsMt:fMt, ammMt:aMt} = calcMarges(newCA, newCD);
       await client.query(
         `UPDATE atp SET real_ca_ht=$1,real_cd_ht=$2,real_marge_brute_ht=$3,
          taux_marge_brute=$4,taux_avancement_ca=$5,bmf_mt=$6,fs_mt=$7,amm_mt=$8
          WHERE periode=$9`,
-        [newCA,newCD,newMB,newTMB,taux,bmf,fs,amm,mois]
+        [newCA,newCD,newMB,newTMB,taux,bMt,fMt,aMt,mois]
       );
     } else {
-      const bmf=mbR*(0.15/0.35), fs=mbR*(0.1/0.35), amm=mbR*(0.1/0.35);
+      const {bmfMt:bMt,fsMt:fMt,ammMt:aMt} = calcMarges(caHT,cdHT);
       await client.query(
         `INSERT INTO atp (periode,statut,real_ca_ht,real_cd_ht,real_marge_brute_ht,taux_marge_brute,bmf_mt,fs_mt,amm_mt)
          VALUES ($1,'en_cours',$2,$3,$4,$5,$6,$7,$8)`,
-        [mois,caRealise,cdR,mbR,tmbR,bmf,fs,amm]
+        [mois,caHT,cdHT,mbHT,tmbHT,bMt,fMt,aMt]
       );
     }
-    console.log(`[ATP] ✅ Mise à jour ATP ${mois} — CA réalisé: ${caRealise} FCFA`);
+    console.log(`[ATP] ✅ CA:${Math.round(caHT)} CD:${Math.round(cdHT)} MB:${Math.round(mbHT)} TMB:${(tmbHT*100).toFixed(1)}%`);
   }
-  console.log(`[PROD] ✅ Stocks et ATP mis à jour pour production ${prodId}`);
 }
 
 router.get('/', auth, async (req,res) => {
@@ -154,6 +150,7 @@ router.post('/', auth, async (req,res) => {
     const prodId=rows[0].id;
     await client.query('DELETE FROM lignes_production WHERE production_id=$1',[prodId]);
     await client.query('DELETE FROM rebuts WHERE production_id=$1',[prodId]);
+
     for(const prod of productions){
       if(!prod.quantite||prod.quantite===0) continue;
       const {rows:fmtRows}=await client.query(`SELECT id FROM formats_produits WHERE code=$1`,[prod.code]);
@@ -173,41 +170,25 @@ router.post('/', auth, async (req,res) => {
     }
     await client.query('COMMIT');
     res.status(201).json({message:'Saisie enregistrée — en attente de validation DG',id:prodId});
-  } catch(err){
-    await client.query('ROLLBACK');
-    console.error('[PROD POST]',err);
-    res.status(500).json({message:err.message||'Erreur'});
-  } finally{client.release();}
+  } catch(err){await client.query('ROLLBACK');console.error(err);res.status(500).json({message:err.message||'Erreur'});}
+  finally{client.release();}
 });
 
 router.put('/:id/valider', auth, role(DG), async (req,res) => {
   const client=await pool.connect();
   try {
     await client.query('BEGIN');
-    // Supprimer anciens mouvements de stock liés à cette prod pour éviter les doublons
     const {rows:pj}=await client.query(`SELECT date_production FROM productions_jour WHERE id=$1`,[req.params.id]);
-    if(pj[0]) {
-      await client.query(
-        `DELETE FROM stocks_mouvements WHERE motif LIKE 'Production validée%' AND date_mouvement=$1`,
-        [pj[0].date_production]
-      );
-      await client.query(
-        `DELETE FROM stocks_mouvements WHERE motif='Consommation production validée' AND date_mouvement=$1`,
-        [pj[0].date_production]
-      );
+    if(pj[0]){
+      await client.query(`DELETE FROM stocks_mouvements WHERE motif LIKE 'Production validée%' AND date_mouvement=$1`,[pj[0].date_production]);
+      await client.query(`DELETE FROM stocks_mouvements WHERE motif='Consommation production validée' AND date_mouvement=$1`,[pj[0].date_production]);
     }
-    await client.query(
-      `UPDATE productions_jour SET statut='valide',valide_par=$1,modifie_le=NOW() WHERE id=$2`,
-      [req.user.id,req.params.id]
-    );
-    await mettreAJourStocksATP(client,req.params.id,req.user.id);
+    await client.query(`UPDATE productions_jour SET statut='valide',valide_par=$1,modifie_le=NOW() WHERE id=$2`,[req.user.id,req.params.id]);
+    await mettreAJourApresValidation(client,req.params.id,req.user.id);
     await client.query('COMMIT');
-    res.json({message:'✓ Production validée — Stocks et ATP mis à jour automatiquement'});
-  } catch(err){
-    await client.query('ROLLBACK');
-    console.error('[VALIDER]',err);
-    res.status(500).json({message:err.message||'Erreur validation'});
-  } finally{client.release();}
+    res.json({message:'✓ Production validée — Stocks et ATP mis à jour (CD calculé sur vraies formules)'});
+  } catch(err){await client.query('ROLLBACK');console.error('[VALIDER]',err);res.status(500).json({message:err.message||'Erreur'});}
+  finally{client.release();}
 });
 
 router.delete('/:id', auth, role(DG), async (req,res) => {
@@ -216,7 +197,7 @@ router.delete('/:id', auth, role(DG), async (req,res) => {
     await pool.query('DELETE FROM lignes_production WHERE production_id=$1',[req.params.id]);
     await pool.query('DELETE FROM productions_jour WHERE id=$1',[req.params.id]);
     res.json({message:'Saisie supprimée'});
-  } catch(err){res.status(500).json({message:'Erreur serveur'});}
+  } catch{res.status(500).json({message:'Erreur serveur'});}
 });
 
 router.get('/kpis/mois-courant', auth, async (req,res) => {
@@ -231,12 +212,11 @@ router.get('/kpis/mois-courant', auth, async (req,res) => {
     const kpis={c12:0,c24:0,f615:0,f605:0,f61:0,hilio:0,jours_ouvres:0};
     rows.forEach(r=>{kpis[r.code.toLowerCase()]=parseInt(r.total);});
     const {rows:jr}=await pool.query(
-      `SELECT COALESCE(SUM(jours_ouvres),0) AS jours FROM productions_jour
-       WHERE TO_CHAR(date_production,'YYYY-MM')=$1 AND statut='valide'`,[m]
+      `SELECT COALESCE(SUM(jours_ouvres),0) AS jours FROM productions_jour WHERE TO_CHAR(date_production,'YYYY-MM')=$1 AND statut='valide'`,[m]
     );
     kpis.jours_ouvres=parseFloat(jr[0]?.jours||0);
     res.json({kpis});
-  } catch(err){res.status(500).json({message:'Erreur serveur'});}
+  } catch{res.status(500).json({message:'Erreur serveur'});}
 });
 
 router.get('/kpis/evolution', auth, async (req,res) => {
@@ -254,7 +234,7 @@ router.get('/kpis/evolution', auth, async (req,res) => {
       if(['c12','c24','hilio'].includes(r.code.toLowerCase())) map[r.mois][r.code.toLowerCase()]=parseInt(r.total);
     });
     res.json(Object.values(map));
-  } catch(err){res.status(500).json({message:'Erreur serveur'});}
+  } catch{res.status(500).json({message:'Erreur serveur'});}
 });
 
 module.exports = router;
