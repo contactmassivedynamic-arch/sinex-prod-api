@@ -1,196 +1,223 @@
-const router  = require('express').Router();
-const pool    = require('../db/pool');
-const auth    = require('../middleware/auth');
+const router   = require('express').Router();
+const pool     = require('../db/pool');
+const auth     = require('../middleware/auth');
 const { genererExcel, genererPDF } = require('../utils/rapportGenerateur');
 const formules = require('../utils/formules');
 
+// GET /api/rapports
 router.get('/', auth, async (req, res) => {
   try {
-    const {mois} = req.query;
-    let q = `SELECT r.id,r.type_rapport,r.titre,r.periode_debut,r.genere_le,r.statut_envoi,
-      u.nom_complet AS genere_par_nom FROM rapports r
-      LEFT JOIN utilisateurs u ON u.id=r.genere_par_id WHERE 1=1`;
-    const params=[];
-    if (mois && mois!=='all') { params.push(mois); q+=` AND r.periode_debut=$${params.length}`; }
-    q+=` ORDER BY r.genere_le DESC`;
-    const {rows} = await pool.query(q, params);
+    const { mois } = req.query;
+    let q = `SELECT r.id, r.type_rapport, r.titre, r.periode_debut, r.genere_le,
+      r.statut_envoi, u.nom_complet AS genere_par_nom
+      FROM rapports r LEFT JOIN utilisateurs u ON u.id=r.genere_par_id WHERE 1=1`;
+    const params = [];
+    if (mois && mois !== 'all') { params.push(mois); q += ` AND r.periode_debut=$${params.length}`; }
+    q += ` ORDER BY r.genere_le DESC`;
+    const { rows } = await pool.query(q, params);
     res.json(rows);
-  } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
+  } catch(err) { res.status(500).json({ message: 'Erreur serveur' }); }
 });
 
+// POST /api/rapports/generer
 router.post('/generer', auth, async (req, res) => {
   try {
-    const {type_rapport, format, mois} = req.body;
-    const moisRap = mois || new Date().toISOString().slice(0,7);
+    const { type_rapport, format, mois } = req.body;
+    const moisRap = mois || new Date().toISOString().slice(0, 7);
     let donnees = {};
 
     // Nom DG
     try {
-      const {rows:dgRows} = await pool.query(`SELECT nom_complet FROM utilisateurs WHERE id=$1`,[req.user.id]);
-      donnees.dg_nom = dgRows[0]?.nom_complet || 'Boumzina Raïna';
+      const { rows: dg } = await pool.query(
+        `SELECT nom_complet FROM utilisateurs WHERE id=$1`, [req.user.id]
+      );
+      donnees.dg_nom = dg[0]?.nom_complet || 'Boumzina Raïna';
     } catch { donnees.dg_nom = 'Boumzina Raïna'; }
 
-    // ── Données production / rebuts ──
-    if (['production','rebuts'].includes(type_rapport)) {
-      const {rows:saisies} = await pool.query(`
-        SELECT pj.id, pj.date_production, pj.statut, pj.jours_ouvres,
-          u.nom_complet AS saisi_par_nom,
-          COALESCE(
-            (SELECT json_object_agg(fp2.code, lp2.cartons_produits)
-             FROM lignes_production lp2
-             JOIN formats_produits fp2 ON fp2.id = lp2.format_id
-             WHERE lp2.production_id = pj.id),
-            '{}'::json
-          ) AS prods,
-          COALESCE(
-            (SELECT json_build_object(
-              'pref32',    COALESCE(rb2.pref32,0),
-              'pref17',    COALESCE(rb2.pref17,0),
-              'bouchons',  COALESCE(rb2.bouchons,0),
-              'ctn_c12',   COALESCE(rb2.ctn_c12,0),
-              'ctn_c24',   COALESCE(rb2.ctn_c24,0),
-              'hilio',     COALESCE(rb2.hilio_rebut,0),
-              'etiquettes',COALESCE(rb2.etiquettes,0)
-             )
-             FROM rebuts rb2 WHERE rb2.production_id = pj.id),
-            '{}'::json
-          ) AS rebuts_obj
-        FROM productions_jour pj
-        LEFT JOIN utilisateurs u ON u.id::text = pj.saisi_par::text
-        WHERE TO_CHAR(pj.date_production, 'YYYY-MM') = $1
-        ORDER BY pj.date_production
-      `, [moisRap]);
+    // ── PRODUCTION & REBUTS ──────────────────────
+    if (['production', 'rebuts'].includes(type_rapport)) {
 
-      donnees.saisies = saisies.map(s => ({
-        ...s,
-        c12:   parseInt(s.prods?.C12  || 0),
-        c24:   parseInt(s.prods?.C24  || 0),
-        f615:  parseInt(s.prods?.F615 || 0),
-        f605:  parseInt(s.prods?.F605 || 0),
-        f61:   parseInt(s.prods?.F61  || 0),
-        hilio: parseInt(s.prods?.HILIO|| 0),
-        rebuts: s.rebuts_obj || {},
-      }));
+      // 1. Récupérer les saisies sans JOIN complexe
+      const { rows: pjRows } = await pool.query(
+        `SELECT id, date_production, statut, jours_ouvres
+         FROM productions_jour
+         WHERE TO_CHAR(date_production, 'YYYY-MM') = $1
+         ORDER BY date_production`,
+        [moisRap]
+      );
 
-      const valides = donnees.saisies.filter(s => s.statut === 'valide');
+      // 2. Pour chaque saisie, récupérer lignes et rebuts séparément
+      const saisies = [];
+      for (const pj of pjRows) {
+        // Lignes de production
+        const { rows: lignes } = await pool.query(
+          `SELECT fp.code, lp.cartons_produits
+           FROM lignes_production lp
+           JOIN formats_produits fp ON fp.id = lp.format_id
+           WHERE lp.production_id = $1`,
+          [pj.id]
+        );
+        const prods = {};
+        lignes.forEach(l => { prods[l.code] = parseInt(l.cartons_produits) || 0; });
+
+        // Rebuts
+        const { rows: rebRows } = await pool.query(
+          `SELECT pref32, pref17, bouchons, ctn_c12, ctn_c24, hilio_rebut, etiquettes
+           FROM rebuts WHERE production_id = $1`,
+          [pj.id]
+        );
+        const rb = rebRows[0] || {};
+
+        saisies.push({
+          ...pj,
+          c12:   prods['C12']   || 0,
+          c24:   prods['C24']   || 0,
+          f615:  prods['F615']  || 0,
+          f605:  prods['F605']  || 0,
+          f61:   prods['F61']   || 0,
+          hilio: prods['HILIO'] || 0,
+          rebuts: {
+            pref32:     parseInt(rb.pref32)      || 0,
+            pref17:     parseInt(rb.pref17)      || 0,
+            bouchons:   parseInt(rb.bouchons)    || 0,
+            ctn_c12:    parseInt(rb.ctn_c12)     || 0,
+            ctn_c24:    parseInt(rb.ctn_c24)     || 0,
+            hilio:      parseInt(rb.hilio_rebut) || 0,
+            etiquettes: parseInt(rb.etiquettes)  || 0,
+          },
+          saisi_par_nom: 'Opérateur',
+        });
+      }
+
+      donnees.saisies = saisies;
+      const valides = saisies.filter(s => s.statut === 'valide');
 
       donnees.totaux = {
-        c12:   valides.reduce((a,s)=>a+(s.c12||0),0),
-        c24:   valides.reduce((a,s)=>a+(s.c24||0),0),
-        f615:  valides.reduce((a,s)=>a+(s.f615||0),0),
-        f605:  valides.reduce((a,s)=>a+(s.f605||0),0),
-        f61:   valides.reduce((a,s)=>a+(s.f61||0),0),
-        hilio: valides.reduce((a,s)=>a+(s.hilio||0),0),
+        c12:   valides.reduce((a, s) => a + (s.c12   || 0), 0),
+        c24:   valides.reduce((a, s) => a + (s.c24   || 0), 0),
+        f615:  valides.reduce((a, s) => a + (s.f615  || 0), 0),
+        f605:  valides.reduce((a, s) => a + (s.f605  || 0), 0),
+        f61:   valides.reduce((a, s) => a + (s.f61   || 0), 0),
+        hilio: valides.reduce((a, s) => a + (s.hilio || 0), 0),
       };
 
       // Consommations cumulées
       const consCum = {}, rebCum = {};
       valides.forEach(s => {
-        const prods = {C12:s.c12,C24:s.c24,F615:s.f615,F605:s.f605,F61:s.f61,HILIO:s.hilio};
-        const conso = formules.calcConsommations(prods);
-        Object.entries(conso).forEach(([k,v])=>{ consCum[k]=(consCum[k]||0)+v; });
-        const rb = s.rebuts || {};
-        rebCum.PREF_32G   = (rebCum.PREF_32G  ||0)+(parseInt(rb.pref32)||0);
-        rebCum.PREF_17G   = (rebCum.PREF_17G  ||0)+(parseInt(rb.pref17)||0);
-        rebCum.BOUCH_VERT = (rebCum.BOUCH_VERT||0)+(parseInt(rb.bouchons)||0);
-        rebCum.CTN_15L    = (rebCum.CTN_15L   ||0)+(parseInt(rb.ctn_c12)||0);
-        rebCum.CTN_05L    = (rebCum.CTN_05L   ||0)+(parseInt(rb.ctn_c24)||0);
-        rebCum.ETI_15L    = (rebCum.ETI_15L   ||0)+(parseInt(rb.etiquettes)||0);
+        const conso = formules.calcConsommations({
+          C12: s.c12, C24: s.c24, F615: s.f615,
+          F605: s.f605, F61: s.f61, HILIO: s.hilio,
+        });
+        Object.entries(conso).forEach(([k, v]) => { consCum[k] = (consCum[k] || 0) + v; });
+        const rb = s.rebuts;
+        rebCum.PREF_32G   = (rebCum.PREF_32G   || 0) + rb.pref32;
+        rebCum.PREF_17G   = (rebCum.PREF_17G   || 0) + rb.pref17;
+        rebCum.BOUCH_VERT = (rebCum.BOUCH_VERT || 0) + rb.bouchons;
+        rebCum.CTN_15L    = (rebCum.CTN_15L    || 0) + rb.ctn_c12;
+        rebCum.CTN_05L    = (rebCum.CTN_05L    || 0) + rb.ctn_c24;
+        rebCum.ETI_15L    = (rebCum.ETI_15L    || 0) + rb.etiquettes;
       });
       donnees.consommations_cumulees = consCum;
       donnees.rebuts_cumules = rebCum;
 
       // Liste rebuts pour rapport rebuts
-      donnees.rebuts = valides.flatMap(s => {
-        const rb = s.rebuts || {};
-        return [
-          {date:s.date_production, intrant:'Préformes 32g',  quantite:parseInt(rb.pref32)||0,    prix:53,  valeur:(parseInt(rb.pref32)||0)*53},
-          {date:s.date_production, intrant:'Préformes 17g',  quantite:parseInt(rb.pref17)||0,    prix:28,  valeur:(parseInt(rb.pref17)||0)*28},
-          {date:s.date_production, intrant:'Bouchons',       quantite:parseInt(rb.bouchons)||0,  prix:5,   valeur:(parseInt(rb.bouchons)||0)*5},
-          {date:s.date_production, intrant:'Cartons C12',    quantite:parseInt(rb.ctn_c12)||0,   prix:233, valeur:(parseInt(rb.ctn_c12)||0)*233},
-          {date:s.date_production, intrant:'Cartons C24',    quantite:parseInt(rb.ctn_c24)||0,   prix:200, valeur:(parseInt(rb.ctn_c24)||0)*200},
-          {date:s.date_production, intrant:'Étiquettes',     quantite:parseInt(rb.etiquettes)||0,prix:9,   valeur:(parseInt(rb.etiquettes)||0)*9},
-        ].filter(r => r.quantite > 0);
-      });
+      donnees.rebuts = valides.flatMap(s => [
+        { date: s.date_production, intrant: 'Préformes 32g',  quantite: s.rebuts.pref32,     prix: 53,  valeur: s.rebuts.pref32     * 53  },
+        { date: s.date_production, intrant: 'Préformes 17g',  quantite: s.rebuts.pref17,     prix: 28,  valeur: s.rebuts.pref17     * 28  },
+        { date: s.date_production, intrant: 'Bouchons',       quantite: s.rebuts.bouchons,   prix: 5,   valeur: s.rebuts.bouchons   * 5   },
+        { date: s.date_production, intrant: 'Cartons C12',    quantite: s.rebuts.ctn_c12,    prix: 233, valeur: s.rebuts.ctn_c12    * 233 },
+        { date: s.date_production, intrant: 'Cartons C24',    quantite: s.rebuts.ctn_c24,    prix: 200, valeur: s.rebuts.ctn_c24    * 200 },
+        { date: s.date_production, intrant: 'Étiquettes',     quantite: s.rebuts.etiquettes, prix: 9,   valeur: s.rebuts.etiquettes * 9   },
+      ]).filter(r => r.quantite > 0);
     }
 
-    // ── Données ATP ──
+    // ── ATP ─────────────────────────────────────
     if (type_rapport === 'atp') {
-      const {rows:atpRows} = await pool.query(`SELECT * FROM atp WHERE periode=$1`,[moisRap]);
+      const { rows: atpRows } = await pool.query(
+        `SELECT * FROM atp WHERE periode=$1`, [moisRap]
+      );
       donnees.atp = atpRows[0] || {};
-      const {rows:objRows} = await pool.query(
-        `SELECT code_produit, quantite FROM atp_objectifs WHERE atp_id=$1`,[donnees.atp.id||0]
-      ).catch(()=>({rows:[]}));
-      donnees.objectifs = {C12:0,C24:0,F615:0,F605:0,F61:0,HILIO:0};
-      objRows.forEach(r=>{donnees.objectifs[r.code_produit]=parseFloat(r.quantite||0);});
-      const {rows:realRows} = await pool.query(
+      const atpId = donnees.atp.id;
+
+      if (atpId) {
+        const { rows: objRows } = await pool.query(
+          `SELECT code_produit, quantite FROM atp_objectifs WHERE atp_id=$1`, [atpId]
+        ).catch(() => ({ rows: [] }));
+        donnees.objectifs = { C12:0, C24:0, F615:0, F605:0, F61:0, HILIO:0 };
+        objRows.forEach(r => { donnees.objectifs[r.code_produit] = parseFloat(r.quantite || 0); });
+      } else {
+        donnees.objectifs = { C12:0, C24:0, F615:0, F605:0, F61:0, HILIO:0 };
+      }
+
+      const { rows: realRows } = await pool.query(
         `SELECT fp.code, COALESCE(SUM(lp.cartons_produits),0) AS q
          FROM lignes_production lp
-         JOIN formats_produits fp ON fp.id=lp.format_id
-         JOIN productions_jour pj ON pj.id=lp.production_id
+         JOIN formats_produits fp ON fp.id = lp.format_id
+         JOIN productions_jour pj ON pj.id = lp.production_id
          WHERE TO_CHAR(pj.date_production,'YYYY-MM')=$1 AND pj.statut='valide'
-         GROUP BY fp.code`,[moisRap]
+         GROUP BY fp.code`, [moisRap]
       );
-      donnees.realisations = {C12:0,C24:0,F615:0,F605:0,F61:0,HILIO:0};
-      realRows.forEach(r=>{donnees.realisations[r.code]=parseFloat(r.q||0);});
+      donnees.realisations = { C12:0, C24:0, F615:0, F605:0, F61:0, HILIO:0 };
+      realRows.forEach(r => { donnees.realisations[r.code] = parseFloat(r.q || 0); });
       donnees.charges  = donnees.atp.charges_indirectes || {};
-      donnees.totalCI  = Object.values(donnees.charges).reduce((s,v)=>s+parseFloat(v||0),0);
+      donnees.totalCI  = Object.values(donnees.charges).reduce((s, v) => s + parseFloat(v || 0), 0);
     }
 
-    // ── Données stocks ──
+    // ── STOCKS ──────────────────────────────────
     if (type_rapport === 'stocks') {
-      const {rows:articles} = await pool.query(`
+      const { rows: articles } = await pool.query(`
         SELECT sa.*,
           COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' THEN sm.quantite
-            WHEN sm.type_mouvement='sortie' THEN -sm.quantite ELSE 0 END),0) AS stock_actuel,
+            WHEN sm.type_mouvement='sortie' THEN -sm.quantite ELSE 0 END), 0) AS stock_actuel,
           COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' THEN sm.quantite
-            WHEN sm.type_mouvement='sortie' THEN -sm.quantite ELSE 0 END),0)*sa.prix_unitaire_ht AS valeur_stock_ht
+            WHEN sm.type_mouvement='sortie' THEN -sm.quantite ELSE 0 END), 0) * sa.prix_unitaire_ht AS valeur_stock_ht
         FROM stocks_articles sa
-        LEFT JOIN stocks_mouvements sm ON sm.article_id=sa.id
-        WHERE sa.actif=true GROUP BY sa.id ORDER BY sa.classe,sa.libelle`
+        LEFT JOIN stocks_mouvements sm ON sm.article_id = sa.id
+        WHERE sa.actif = true GROUP BY sa.id ORDER BY sa.classe, sa.libelle`
       );
       donnees.articles = articles;
-      const {rows:mvts} = await pool.query(`
+      const { rows: mvts } = await pool.query(`
         SELECT sm.*, sa.libelle AS article_libelle, sa.code AS article_code,
-          sa.unite, sa.classe, sm.quantite*sa.prix_unitaire_ht AS valeur_ht,
-          u.nom_complet AS saisi_par_nom
+          sa.unite, sa.classe, sm.quantite * sa.prix_unitaire_ht AS valeur_ht
         FROM stocks_mouvements sm
-        JOIN stocks_articles sa ON sa.id=sm.article_id
-        LEFT JOIN utilisateurs u ON u.id=sm.saisi_par_id
-        WHERE TO_CHAR(sm.date_mouvement,'YYYY-MM')=$1
-        ORDER BY sm.date_mouvement DESC`,[moisRap]
+        JOIN stocks_articles sa ON sa.id = sm.article_id
+        WHERE TO_CHAR(sm.date_mouvement,'YYYY-MM') = $1
+        ORDER BY sm.date_mouvement DESC`, [moisRap]
       );
       donnees.mouvements = mvts;
     }
 
-    // ── Données trésorerie ──
+    // ── TRÉSORERIE ──────────────────────────────
     if (type_rapport === 'tresorerie') {
-      const {rows:comptes} = await pool.query(`
-        SELECT c.*, COALESCE(SUM(CASE WHEN m.sens='credit' THEN m.montant_fcfa
-          WHEN m.sens='debit' THEN -m.montant_fcfa ELSE 0 END),0) AS solde_fcfa
+      const { rows: comptes } = await pool.query(`
+        SELECT c.*, COALESCE(SUM(
+          CASE WHEN m.sens='credit' THEN m.montant_fcfa
+               WHEN m.sens='debit'  THEN -m.montant_fcfa ELSE 0 END), 0) AS solde_fcfa
         FROM comptes_tresorerie c
-        LEFT JOIN tresorerie_mouvements m ON m.compte_id=c.id
-        WHERE c.actif=true GROUP BY c.id ORDER BY c.type_compte DESC,c.libelle`
+        LEFT JOIN tresorerie_mouvements m ON m.compte_id = c.id
+        WHERE c.actif = true GROUP BY c.id ORDER BY c.libelle`
       );
       donnees.comptes = comptes;
-      const {rows:mvts} = await pool.query(`
-        SELECT m.*, c.libelle AS compte_libelle, u.nom_complet AS saisi_par_nom,
-          SUM(CASE WHEN m2.sens='credit' THEN m2.montant_fcfa WHEN m2.sens='debit' THEN -m2.montant_fcfa ELSE 0 END)
+      const { rows: mvts } = await pool.query(`
+        SELECT m.*, c.libelle AS compte_libelle,
+          SUM(CASE WHEN m2.sens='credit' THEN m2.montant_fcfa
+                   WHEN m2.sens='debit'  THEN -m2.montant_fcfa ELSE 0 END)
             OVER (PARTITION BY m.compte_id ORDER BY m.date_mouvement, m.id) AS solde_apres
         FROM tresorerie_mouvements m
-        JOIN comptes_tresorerie c ON c.id=m.compte_id
-        LEFT JOIN utilisateurs u ON u.id=m.saisi_par_id
-        LEFT JOIN tresorerie_mouvements m2 ON m2.compte_id=m.compte_id
-          AND (m2.date_mouvement < m.date_mouvement OR (m2.date_mouvement=m.date_mouvement AND m2.id<=m.id))
-        WHERE TO_CHAR(m.date_mouvement,'YYYY-MM')=$1
-        ORDER BY m.date_mouvement DESC, m.id DESC`,[moisRap]
+        JOIN comptes_tresorerie c ON c.id = m.compte_id
+        LEFT JOIN tresorerie_mouvements m2 ON m2.compte_id = m.compte_id
+          AND (m2.date_mouvement < m.date_mouvement
+           OR (m2.date_mouvement = m.date_mouvement AND m2.id <= m.id))
+        WHERE TO_CHAR(m.date_mouvement,'YYYY-MM') = $1
+        ORDER BY m.date_mouvement DESC, m.id DESC`, [moisRap]
       );
       donnees.mouvements = mvts;
     }
 
-    // ── Générer fichier ──
+    // ── Générer le fichier ───────────────────────
     let buffer, contentType, fileName;
-    if (format === 'Excel' || format === 'excel') {
+    const isExcel = format === 'Excel' || format === 'excel';
+    if (isExcel) {
       buffer = await genererExcel(type_rapport, donnees, moisRap);
       contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       fileName = `SINEX_${type_rapport}_${moisRap}.xlsx`;
@@ -200,12 +227,12 @@ router.post('/generer', auth, async (req, res) => {
       fileName = `SINEX_${type_rapport}_${moisRap}.pdf`;
     }
 
-    // Historique
+    // Enregistrer dans l'historique (non bloquant)
     pool.query(
-      `INSERT INTO rapports (type_rapport,titre,periode_debut,genere_par_id,statut_envoi)
+      `INSERT INTO rapports (type_rapport, titre, periode_debut, genere_par_id, statut_envoi)
        VALUES ($1,$2,$3,$4,'genere')`,
       [type_rapport, `Rapport ${type_rapport} ${moisRap}`, moisRap, req.user.id]
-    ).catch(()=>{});
+    ).catch(() => {});
 
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
@@ -213,8 +240,9 @@ router.post('/generer', auth, async (req, res) => {
     res.send(buffer);
 
   } catch(err) {
-    console.error('[RAPPORTS]', err.message, err.stack?.split('\n')[1]);
-    res.status(500).json({message: err.message || 'Erreur génération rapport'});
+    console.error('[RAPPORTS ERROR]', err.message);
+    console.error(err.stack?.split('\n').slice(0, 4).join('\n'));
+    res.status(500).json({ message: err.message || 'Erreur génération rapport' });
   }
 });
 
