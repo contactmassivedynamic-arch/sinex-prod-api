@@ -377,6 +377,7 @@ async function genererPDF(type, donnees, mois) {
     default:           pdfProduction(doc,donnees);
       }
 
+      pdfAnalyseIA(doc, donnees.analyse_ia);
       pdfSignature(doc, donnees.dg_nom);
       doc.end();
     } catch(e) { reject(e); }
@@ -421,6 +422,40 @@ function pdfEntete(doc, type, mois, dgNom) {
 
   doc.rect(0,149,W,2).fill('#475569');
   doc.moveDown(5.5);
+}
+
+function pdfAnalyseIA(doc, analyseIA) {
+  if (!analyseIA) return;
+  if (doc.y > doc.page.height-150) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+  doc.moveDown(0.8);
+  const W = doc.page.width - 90;
+  const y = doc.y;
+  doc.rect(45, y, W, 16).fill('#1E293B');
+  doc.fillColor('#A78BFA').fontSize(9).font('Helvetica-Bold')
+     .text('🤖  ANALYSE IA — RECOMMANDATIONS CLAUDE', 49, y+3, {width:W-8, lineBreak:false});
+  doc.moveDown(1.0);
+
+  // Fond léger
+  const yStart = doc.y;
+  doc.fillColor('#334155').fontSize(9).font('Helvetica');
+
+  const lignes = analyseIA.split('\n').filter(l=>l.trim());
+  lignes.forEach(ligne => {
+    if (doc.y > doc.page.height-80) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+    const isTitre = ligne.startsWith('**') || ligne.startsWith('#') || ligne.match(/^\d+\./);
+    const texte = ligne.replace(/\*\*/g,'').replace(/^#+\s/,'').trim();
+    if (!texte) { doc.moveDown(0.3); return; }
+    doc.fillColor(isTitre?'#F1F5F9':'#CBD5E1')
+       .fontSize(isTitre?9:8.5)
+       .font(isTitre?'Helvetica-Bold':'Helvetica')
+       .text(texte, 52, doc.y, {width:W-14});
+    doc.moveDown(0.45);
+  });
+
+  // Bordure gauche violette
+  const yEnd = doc.y;
+  doc.rect(45, yStart-2, 3, yEnd-yStart+4).fill('#7C3AED');
+  doc.moveDown(0.5);
 }
 
 function pdfSignature(doc, dgNom) {
