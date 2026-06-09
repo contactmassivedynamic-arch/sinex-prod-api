@@ -61,9 +61,9 @@ router.get('/mois', auth, async (req, res) => {
     const CDHTP = calcCDHT(objectifs, {});
     const mP = calcMarges(CAHTP, CDHTP);
 
-    // Calculs CAHTR / CDHTR (réalisé)
-    const CAHTR = atp ? parseFloat(atp.real_ca_ht||0) : calcCAHT(realisations);
-    const CDHTR = atp ? parseFloat(atp.real_cd_ht||0) : calcCDHT(realisations, {});
+    // Calculs CAHTR / CDHTR — toujours depuis les productions validées
+    const CAHTR = calcCAHT(realisations);
+    const CDHTR = calcCDHT(realisations, {});
     const mR = calcMarges(CAHTR, CDHTR);
 
     res.json({

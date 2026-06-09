@@ -118,13 +118,14 @@ function calcMarges(caHT, cdHT) {
   const mbHT  = caHT - cdHT;
   const tmbHT = caHT > 0 ? mbHT / caHT : 0;
 
-  // Répartition MB : 35% = 15% BMF + 10% FS + 10% AMM
-  const bmfMt = tmbHT > 0 ? (caHT * 0.35) / (tmbHT * 0.15) : 0;
-  const fsMt  = tmbHT > 0 ? (caHT * 0.35) / (tmbHT * 0.10) : 0;
-  const ammMt = tmbHT > 0 ? (caHT * 0.35) / (tmbHT * 0.10) : 0;
-  const bmfTx = tmbHT * 0.15 / 0.35;
-  const fsTx  = tmbHT * 0.10 / 0.35;
-  const ammTx = tmbHT * 0.10 / 0.35;
+  // Répartition MBHT : BMF=15/35 de MB, FS=10/35 de MB, AMM=10/35 de MB
+  // Total = 35/35 = 100% de la MB attribuée (soit 35% du CA)
+  const bmfMt = mbHT * (15 / 35);
+  const fsMt  = mbHT * (10 / 35);
+  const ammMt = mbHT * (10 / 35);
+  const bmfTx = tmbHT * (15 / 35);
+  const fsTx  = tmbHT * (10 / 35);
+  const ammTx = tmbHT * (10 / 35);
 
   return { mbHT, tmbHT, bmfMt, fsMt, ammMt, bmfTx, fsTx, ammTx };
 }
