@@ -35,25 +35,29 @@ router.post('/generer', auth, async (req, res) => {
       const {rows:saisies} = await pool.query(`
         SELECT pj.id, pj.date_production, pj.statut, pj.jours_ouvres,
           u.nom_complet AS saisi_par_nom,
-          COALESCE(json_object_agg(fp.code, lp.cartons_produits)
-            FILTER (WHERE fp.code IS NOT NULL), '{}') AS prods,
-          COALESCE(json_build_object(
-            'pref32',   COALESCE(rb.pref32,0),
-            'pref17',   COALESCE(rb.pref17,0),
-            'bouchons', COALESCE(rb.bouchons,0),
-            'ctn_c12',  COALESCE(rb.ctn_c12,0),
-            'ctn_c24',  COALESCE(rb.ctn_c24,0),
-            'hilio',    COALESCE(rb.hilio_rebut,0),
-            'etiquettes',COALESCE(rb.etiquettes,0)
-          ), '{}') AS rebuts_obj
+          COALESCE(
+            (SELECT json_object_agg(fp2.code, lp2.cartons_produits)
+             FROM lignes_production lp2
+             JOIN formats_produits fp2 ON fp2.id = lp2.format_id
+             WHERE lp2.production_id = pj.id),
+            '{}'::json
+          ) AS prods,
+          COALESCE(
+            (SELECT json_build_object(
+              'pref32',    COALESCE(rb2.pref32,0),
+              'pref17',    COALESCE(rb2.pref17,0),
+              'bouchons',  COALESCE(rb2.bouchons,0),
+              'ctn_c12',   COALESCE(rb2.ctn_c12,0),
+              'ctn_c24',   COALESCE(rb2.ctn_c24,0),
+              'hilio',     COALESCE(rb2.hilio_rebut,0),
+              'etiquettes',COALESCE(rb2.etiquettes,0)
+             )
+             FROM rebuts rb2 WHERE rb2.production_id = pj.id),
+            '{}'::json
+          ) AS rebuts_obj
         FROM productions_jour pj
-        LEFT JOIN utilisateurs u ON u.id = pj.saisi_par
-        LEFT JOIN lignes_production lp ON lp.production_id = pj.id
-        LEFT JOIN formats_produits fp ON fp.id = lp.format_id
-        LEFT JOIN rebuts rb ON rb.production_id = pj.id
+        LEFT JOIN utilisateurs u ON u.id::text = pj.saisi_par::text
         WHERE TO_CHAR(pj.date_production, 'YYYY-MM') = $1
-        GROUP BY pj.id, u.nom_complet,
-          rb.pref32,rb.pref17,rb.bouchons,rb.ctn_c12,rb.ctn_c24,rb.hilio_rebut,rb.etiquettes
         ORDER BY pj.date_production
       `, [moisRap]);
 
