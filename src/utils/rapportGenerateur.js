@@ -434,10 +434,26 @@ function pdfSignature(doc, dgNom) {
      .text('Le Directeur Général', 45+W/2, sy, {width:W/2, align:'right'});
   doc.fillColor('#334155').fontSize(11).font('Helvetica')
      .text(dgNom||'Boumzina Raïna', 45+W/2, sy+16, {width:W/2, align:'right'});
+  // Signature + cachet
+  try {
+    if (fs.existsSync(SIG_PATH)) {
+      doc.image(SIG_PATH, doc.page.width-205, sy+28, {width:160, height:65, fit:[160,65]});
+    } else {
+      // Cachet textuel de remplacement
+      doc.roundedRect(doc.page.width-205, sy+28, 160, 65, 5)
+         .lineWidth(1.5).stroke('#0F172A');
+      doc.fillColor('#0F172A').fontSize(7.5).font('Helvetica-Bold')
+         .text('SINEX SA — CACHET OFFICIEL', doc.page.width-203, sy+36, {width:156, align:'center'});
+      doc.moveTo(doc.page.width-203, sy+47).lineTo(doc.page.width-49, sy+47).lineWidth(0.5).stroke('#CBD5E1');
+      doc.fillColor('#334155').fontSize(8.5).font('Helvetica-Bold')
+         .text(dgNom||'Boumzina Raïna', doc.page.width-203, sy+51, {width:156, align:'center'});
+      doc.fillColor('#0891B2').fontSize(7.5).font('Helvetica')
+         .text('Directeur Général', doc.page.width-203, sy+63, {width:156, align:'center'});
+      doc.fillColor('#64748B').fontSize(7).font('Helvetica')
+         .text('Défalé, Togo — '+new Date().toLocaleDateString('fr-FR'), doc.page.width-203, sy+76, {width:156, align:'center'});
+    }
+  } catch(e) { console.error('Signature error:', e.message); }
   doc.moveDown(2.5);
-  doc.moveTo(doc.page.width-180, doc.y).lineTo(doc.page.width-45, doc.y).stroke('#334155');
-  doc.fillColor('#94A3B8').fontSize(9).font('Helvetica-Oblique')
-     .text('Signature & Cachet', doc.page.width-180, doc.y+4, {width:135, align:'center'});
 
   // Pied de page
   const py = doc.page.height-22;
