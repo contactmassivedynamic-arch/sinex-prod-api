@@ -225,10 +225,19 @@ router.post('/tresorerie', auth, upload.single('fichier'), async (req, res) => {
 
       try {
         // Chercher le compte par code ou libelle
+        // Mapping codes modèle → codes réels base
+        const mappingComptes = {
+          'CAISSE_DEFALE': 'CAISSE_DEF',
+          'CAISSE_DIVERS': 'CAISSE_LOM',
+          'BOA_TOGO':      'BOA_TOGO',
+          'BSIC_TOGO':     'BSIC_TOGO',
+          'BATG_TOGO':     'BATG_TOGO',
+        };
+        const codeReel = mappingComptes[compteNom] || compteNom;
         const { rows: cpt } = await pool.query(
           `SELECT id FROM comptes_tresorerie
-           WHERE code ILIKE $1 OR libelle ILIKE $1 OR code ILIKE $2 LIMIT 1`,
-          [`%${compteNom}%`, compteNom]
+           WHERE code=$1 OR code ILIKE $2 OR libelle ILIKE $2 LIMIT 1`,
+          [codeReel, `%${compteNom.replace('_',' ')}%`]
         );
         if (!cpt[0]) { erreurs.push(`Compte introuvable: ${compteNom}`); continue; }
 
