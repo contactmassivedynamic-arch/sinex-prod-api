@@ -44,8 +44,17 @@ router.post('/tester', auth, role(DG), async (req, res) => {
     // Récupérer config DB
     const { rows: cfg } = await pool.query('SELECT * FROM config_email_rapports WHERE id=1').catch(()=>({rows:[]}));
     const config = cfg[0] || req.body;
-    await testerConnexion(config);
-    res.json({message:'Email de test envoyé ✓ — vérifiez votre boîte mail'});
+    const { Resend } = require('resend');
+    const apiKey = req.body.resend_api_key || config.resend_api_key || process.env.RESEND_API_KEY;
+    if (!apiKey) throw new Error('Clé API Resend manquante');
+    const resend = new Resend(apiKey);
+    await resend.emails.send({
+      from: 'SINEX SA <onboarding@resend.dev>',
+      to: ['boumzinaraina@gmail.com'],
+      subject: 'Test configuration email — SINEX SA',
+      text: 'Configuration email opérationnelle ✓ — SINEX SA Dashboard',
+    });
+    res.json({message:'Email de test envoyé ✓ — vérifiez boumzinaraina@gmail.com'});
   } catch(e) { console.error('[RESEND TEST ERROR]',e.message); res.status(400).json({message:'Erreur: '+e.message}); }
 });
 
