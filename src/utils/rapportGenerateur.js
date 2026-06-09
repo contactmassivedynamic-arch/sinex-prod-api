@@ -19,6 +19,7 @@ const fmt  = n => {
 };
 const fmtP = n => ((parseFloat(n)||0)*100).toFixed(2)+' %';
 const fmtD = d => { try{return new Date(d).toLocaleDateString('fr-FR');}catch{return'—';} };
+const strDate = d => { try{ return (d instanceof Date ? d : new Date(d)).toISOString().slice(0,10); } catch{return'—';} };
 
 const ROMAINS = ['I','II','III','IV','V','VI','VII','VIII','IX','X'];
 
@@ -156,7 +157,7 @@ async function xlProduction(wb, d, mois='') {
   xlSection(ws,sec++,'Saisies journalières',10);
   xlEntete(ws,['Date','C12','C24','F6/1,5L','F6/0,5L','F6/1L','HILIO','Jours','Statut','Opérateur']);
   (d.saisies||[]).forEach((s,i)=>{
-    const row=xlLigne(ws,[s.date_production?.slice(0,10)||'—',s.c12||0,s.c24||0,s.f615||0,s.f605||0,s.f61||0,s.hilio||0,s.jours_ouvres||1,s.statut==='valide'?'Validé':'En attente',s.saisi_par_nom||'—']);
+    const row=xlLigne(ws,[strDate(s.date_production)||'—',s.c12||0,s.c24||0,s.f615||0,s.f605||0,s.f61||0,s.hilio||0,s.jours_ouvres||1,s.statut==='valide'?'Validé':'En attente',s.saisi_par_nom||'—']);
     if(i%2===0) row.eachCell(c=>{if(!c.fill?.fgColor?.argb||c.fill.fgColor.argb==='FF000000') c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8FAFC'}};});
   });
 
@@ -275,7 +276,7 @@ async function xlStocks(wb, d, mois='') {
   xlSection(ws2,1,'Historique des entrées et sorties',7);
   xlEntete(ws2,['Date','Article','Cl.','Type','Quantité','Valeur HT','Motif']);
   (d.mouvements||[]).forEach((m,i)=>{
-    const row=xlLigne(ws2,[m.date_mouvement?.slice(0,10)||'—',m.article_libelle||'—',m.classe,m.type_mouvement==='entree'?'Entrée':'Sortie',fmt(m.quantite),fmt(m.valeur_ht||0),m.motif||'—']);
+    const row=xlLigne(ws2,[strDate(m.date_mouvement)||'—',m.article_libelle||'—',m.classe,m.type_mouvement==='entree'?'Entrée':'Sortie',fmt(m.quantite),fmt(m.valeur_ht||0),m.motif||'—']);
     if(i%2===0) row.eachCell(c=>{c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8FAFC'}};});
   });
   return wb.xlsx.writeBuffer();
@@ -316,7 +317,7 @@ async function xlRebuts(wb, d, mois='') {
     xlLigne(ws,['Aucun rebut enregistré pour cette période','','','','']);
   } else {
     rebuts.forEach((r,i)=>{
-      const row=xlLigne(ws,[r.date?.slice(0,10)||'—',r.intrant||'—',fmt(r.quantite||0),fmt(r.prix||0),fmt(r.valeur||0)]);
+      const row=xlLigne(ws,[strDate(r.date)||'—',r.intrant||'—',fmt(r.quantite||0),fmt(r.prix||0),fmt(r.valeur||0)]);
       if(i%2===0) row.eachCell(c=>{c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF8FAFC'}};});
     });
     const totVal=rebuts.reduce((s,r)=>s+(r.valeur||0),0);
@@ -496,7 +497,7 @@ function pdfProduction(doc, d) {
   pdfTableau(doc,
     ['Date','C12','C24','F6/1,5L','F6/0,5L','F6/1L','HILIO','Jrs','Statut'],
     (d.saisies||[]).map(s=>[
-      s.date_production?.slice(0,10)||'—',
+      strDate(s.date_production)||'—',
       fmt(s.c12||0),fmt(s.c24||0),fmt(s.f615||0),fmt(s.f605||0),fmt(s.f61||0),fmt(s.hilio||0),
       s.jours_ouvres||1,
       {text:s.statut==='valide'?'Validé':'Attente',
@@ -640,7 +641,7 @@ function pdfRebuts(doc, d) {
     doc.moveDown(0.6);
   } else {
     pdfTableau(doc,['Date','Intrant','Quantité','Prix HT unit.','Valeur HT (FCFA)'],
-      rebuts.map(r=>[r.date?.slice(0,10)||'—',r.intrant||'—',fmt(r.quantite||0),fmt(r.prix||0),fmt(r.valeur||0)]),
+      rebuts.map(r=>[strDate(r.date)||'—',r.intrant||'—',fmt(r.quantite||0),fmt(r.prix||0),fmt(r.valeur||0)]),
       [65,125,60,70,90]
     );
     const totVal=rebuts.reduce((s,r)=>s+(r.valeur||0),0);

@@ -95,7 +95,7 @@ router.post('/generer', auth, async (req, res) => {
         } catch(e) { console.error('[RAPPORT] Erreur rebuts:', e.message); }
 
         saisies.push({
-          date_production: pj.date_production,
+          date_production: pj.date_production instanceof Date ? pj.date_production.toISOString().slice(0,10) : String(pj.date_production).slice(0,10),
           statut:          pj.statut,
           jours_ouvres:    pj.jours_ouvres,
           saisi_par_nom:   'Opérateur',
