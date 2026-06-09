@@ -90,4 +90,13 @@ router.post('/envoyer', auth, role(DG), async (req, res) => {
   } catch(e) { res.status(500).json({message:e.message}); }
 });
 
+// POST /api/email/redemarrer — redémarrer les crons après changement config
+router.post('/redemarrer', auth, role(DG), async (req, res) => {
+  try {
+    const { demarrerCrons } = require('../utils/cronJobs');
+    await demarrerCrons();
+    res.json({message:'Crons redémarrés ✓'});
+  } catch(e) { res.status(500).json({message:e.message}); }
+});
+
 module.exports = router;

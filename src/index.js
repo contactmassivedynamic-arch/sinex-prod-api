@@ -10,6 +10,7 @@ const morgan  = require('morgan');
 const pool    = require('./db/pool');
 
 const app = express();
+const { demarrerCrons } = require('./utils/cronJobs');
 
 app.use(helmet());
 app.use(morgan('dev'));
@@ -64,6 +65,9 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3001;
+// Démarrer les crons après 5s (DB connectée)
+setTimeout(() => demarrerCrons(), 5000);
+
 app.listen(PORT, async () => {
   console.log(`\n✅ SINEX API démarrée sur le port ${PORT} [${process.env.NODE_ENV}]`);
   console.log('[DB] URL:', process.env.DATABASE_URL ? process.env.DATABASE_URL.slice(0,50)+'...' : '❌ MANQUANTE');
