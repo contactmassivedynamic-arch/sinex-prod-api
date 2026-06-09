@@ -123,6 +123,26 @@ router.delete('/mouvements/:id', auth, role(DG), async (req, res) => {
   } catch(err) { res.status(500).json({message:err.message}); }
 });
 
+// PUT /api/stocks/articles/:id — modifier article (DG)
+router.put('/articles/:id', auth, role(DG), async (req, res) => {
+  try {
+    const {libelle, unite, seuil_alerte} = req.body;
+    await pool.query(
+      `UPDATE stocks_articles SET libelle=$1, unite=$2, seuil_alerte=$3 WHERE id=$4`,
+      [libelle, unite, seuil_alerte, req.params.id]
+    );
+    res.json({message:'Article modifié ✓'});
+  } catch(err) { res.status(500).json({message:err.message}); }
+});
+
+// DELETE /api/stocks/articles/:id — supprimer article (DG)
+router.delete('/articles/:id', auth, role(DG), async (req, res) => {
+  try {
+    await pool.query(`UPDATE stocks_articles SET actif=false WHERE id=$1`,[req.params.id]);
+    res.json({message:'Article supprimé ✓'});
+  } catch(err) { res.status(500).json({message:err.message}); }
+});
+
 // PUT /api/stocks/articles/:id/prix — modifier prix HT (DG uniquement)
 router.put('/articles/:id/prix', auth, role(DG), async (req, res) => {
   try {
