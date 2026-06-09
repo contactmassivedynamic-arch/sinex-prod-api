@@ -24,7 +24,7 @@ router.post('/config', auth, role(DG), async (req, res) => {
       INSERT INTO config_email_rapports (id,smtp_host,smtp_port,smtp_user,smtp_pass,destinataires,emails_supplementaires,objet_email,message_email,actif,frequence)
       VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       ON CONFLICT (id) DO UPDATE SET
-        smtp_host=$1,smtp_port=$2,smtp_user=$3,smtp_pass=$4,
+        smtp_host=$1,smtp_port=$2,smtp_user=$3,smtp_pass=$4,resend_api_key=COALESCE($11,resend_api_key),
         destinataires=$5,emails_supplementaires=$6,
         objet_email=$7,message_email=$8,actif=$9,frequence=$10`,
       [smtp_host||'smtp.gmail.com',smtp_port||'587',smtp_user,smtp_pass,
@@ -37,29 +37,16 @@ router.post('/config', auth, role(DG), async (req, res) => {
   } catch(e) { res.status(500).json({message:e.message}); }
 });
 
-// POST tester connexion SMTP
+// POST tester connexion Resend
 router.post('/tester', auth, role(DG), async (req, res) => {
   try {
-    const nodemailer = require('nodemailer');
-    const port = parseInt(req.body.smtp_port||465);
-    const t = nodemailer.createTransport({
-      host: req.body.smtp_host||'smtp.gmail.com', port,
-      secure: port===465,
-      auth: {user:req.body.smtp_user, pass:req.body.smtp_pass},
-      tls:{rejectUnauthorized:false},
-      connectionTimeout:30000,
-      greetingTimeout:20000,
-      socketTimeout:45000,
-    });
-    // Envoyer un email de test
-    await t.sendMail({
-      from:`"SINEX SA" <${req.body.smtp_user}>`,
-      to: req.body.smtp_user,
-      subject:'Test SMTP — SINEX SA Dashboard',
-      text:'Configuration SMTP opérationnelle ✓',
-    });
+    const { testerConnexion } = require('../utils/emailService');
+    // Récupérer config DB
+    const { rows: cfg } = await pool.query('SELECT * FROM config_email_rapports WHERE id=1').catch(()=>({rows:[]}));
+    const config = cfg[0] || req.body;
+    await testerConnexion(config);
     res.json({message:'Email de test envoyé ✓ — vérifiez votre boîte mail'});
-  } catch(e) { console.error('[SMTP TEST ERROR]',e.message,e.code); res.status(400).json({message:'Erreur SMTP: '+e.message+' (code: '+e.code+')'}); }
+  } catch(e) { console.error('[RESEND TEST ERROR]',e.message); res.status(400).json({message:'Erreur: '+e.message}); }
 });
 
 // POST envoyer maintenant
