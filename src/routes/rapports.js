@@ -262,19 +262,19 @@ router.post('/generer', auth, async (req, res) => {
   }
 });
 
+// DELETE /api/rapports/historique — vider tout (AVANT /:id)
+router.delete('/historique', auth, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM rapports');
+    res.json({message:'Historique effacé ✓'});
+  } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
+});
+
 // DELETE /api/rapports/:id
 router.delete('/:id', auth, async (req, res) => {
   try {
     await pool.query('DELETE FROM rapports WHERE id=$1',[req.params.id]);
     res.json({message:'Rapport supprimé ✓'});
-  } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
-});
-
-// DELETE /api/rapports/historique — vider tout
-router.delete('/historique', auth, async (req, res) => {
-  try {
-    await pool.query('DELETE FROM rapports');
-    res.json({message:'Historique effacé ✓'});
   } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
 });
 

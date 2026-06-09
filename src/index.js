@@ -39,6 +39,7 @@ app.use('/api/tresorerie',   require('./routes/tresorerie'));
 app.use('/api/dashboard',    require('./routes/dashboard'));
 app.use('/api/atp',          require('./routes/atp'));
 app.use('/api/credits',       require('./routes/credits'));
+app.use('/api/email',         require('./routes/email'));
 app.use('/api/rapports',     require('./routes/rapports'));
 app.use('/api/referentiels', require('./routes/referentiels'));
 app.use('/api/import',       require('./routes/import'));
