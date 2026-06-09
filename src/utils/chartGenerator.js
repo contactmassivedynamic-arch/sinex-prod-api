@@ -1,527 +1,573 @@
 /**
- * Génération de graphiques PNG haute résolution pour les rapports PDF SINEX SA
- * Utilise @napi-rs/canvas — rendu natif sans dépendances système
+ * Graphiques professionnels SINEX SA — Style moderne fond blanc
  */
 const { createCanvas } = require('@napi-rs/canvas');
 
-// ── Palette SINEX SA ─────────────────────────────
-const COULEURS = {
-  c12:   '#0891B2', // cyan
-  c24:   '#7C3AED', // violet
-  f615:  '#059669', // vert
-  f605:  '#D97706', // amber
-  f61:   '#DC2626', // rouge
-  hilio: '#0D9488', // teal
-  bg:    '#0F172A', // fond sombre
-  bg2:   '#1E293B',
-  bg3:   '#334155',
-  text:  '#F1F5F9',
-  text2: '#94A3B8',
-  grid:  '#334155',
-  blanc: '#FFFFFF',
+// ── Palette professionnelle ──────────────────────
+const C = {
+  bleu:    '#1A6FB0',
+  cyan:    '#0EA5E9',
+  vert:    '#16A34A',
+  vert2:   '#22C55E',
+  orange:  '#EA580C',
+  rouge:   '#DC2626',
+  violet:  '#7C3AED',
+  teal:    '#0D9488',
+  amber:   '#D97706',
+  rose:    '#DB2777',
+  // Neutres
+  blanc:   '#FFFFFF',
+  fond:    '#F8FAFC',
+  fond2:   '#F1F5F9',
+  bordure: '#E2E8F0',
+  texte:   '#1E293B',
+  texte2:  '#475569',
+  texte3:  '#94A3B8',
+  grille:  '#E8EFF5',
 };
 
-const PALETTE = [COULEURS.c12, COULEURS.c24, COULEURS.f615, COULEURS.f605, COULEURS.f61, COULEURS.hilio,
-                 '#F472B6','#FB923C','#A3E635','#38BDF8'];
+const SERIE = [C.bleu,C.vert,C.orange,C.violet,C.teal,C.rose,C.cyan,C.amber,C.rouge,C.vert2];
 
-const fmt = n => Math.round(parseFloat(n)||0).toLocaleString('fr-FR');
-const W = 900, H = 380;
+const fmt = n => {
+  const v = Math.round(parseFloat(n)||0);
+  if (v >= 1000000) return (v/1000000).toFixed(1)+'M';
+  if (v >= 1000) return (v/1000).toFixed(0)+'k';
+  return v.toLocaleString('fr-FR');
+};
 
-function creerCanvas(w=W, h=H) {
+// ── Utilitaires canvas ───────────────────────────
+function creer(w, h) {
   const canvas = createCanvas(w, h);
   const ctx = canvas.getContext('2d');
-  // Fond sombre SINEX SA
-  ctx.fillStyle = COULEURS.bg2;
+  // Fond blanc
+  ctx.fillStyle = C.blanc;
   ctx.fillRect(0, 0, w, h);
   return { canvas, ctx };
 }
 
-function dessinerGrille(ctx, x0, y0, w, h, nbLignes=5, nbCols=0) {
-  ctx.strokeStyle = COULEURS.grid;
-  ctx.lineWidth = 0.5;
-  ctx.setLineDash([3, 4]);
-  for (let i=0; i<=nbLignes; i++) {
-    const y = y0 + (h/nbLignes)*i;
-    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0+w, y); ctx.stroke();
-  }
-  if (nbCols > 0) {
-    for (let i=0; i<=nbCols; i++) {
-      const x = x0 + (w/nbCols)*i;
-      ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y0+h); ctx.stroke();
-    }
-  }
-  ctx.setLineDash([]);
-}
-
-function texte(ctx, txt, x, y, opts={}) {
-  const { color=COULEURS.text, size=11, bold=false, align='left', maxWidth } = opts;
+function txt(ctx, texte, x, y, {size=11,bold=false,color=C.texte,align='left',italic=false}={}) {
   ctx.fillStyle = color;
-  ctx.font = `${bold?'bold ':''} ${size}px Arial`;
+  ctx.font = `${italic?'italic ':''}${bold?'bold ':''} ${size}px "Arial"`;
   ctx.textAlign = align;
-  if (maxWidth) ctx.fillText(String(txt), x, y, maxWidth);
-  else ctx.fillText(String(txt), x, y);
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(texte), x, y);
 }
 
-function arrondiRect(ctx, x, y, w, h, r, color) {
-  ctx.fillStyle = color;
+function rectArr(ctx, x, y, w, h, r=4, color=C.bleu) {
+  if (w <= 0 || h <= 0) return;
   ctx.beginPath();
   ctx.moveTo(x+r, y);
-  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
-  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
-  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
-  ctx.closePath(); ctx.fill();
+  ctx.lineTo(x+w-r, y); ctx.arcTo(x+w, y, x+w, y+r, r);
+  ctx.lineTo(x+w, y+h-r); ctx.arcTo(x+w, y+h, x+w-r, y+h, r);
+  ctx.lineTo(x+r, y+h); ctx.arcTo(x, y+h, x, y+h-r, r);
+  ctx.lineTo(x, y+r); ctx.arcTo(x, y, x+r, y, r);
+  ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
 }
 
-// ── 1. BARRES PRODUCTION PAR FORMAT ─────────────
+function grille(ctx, x0, y0, w, h, n=5) {
+  ctx.strokeStyle = C.grille; ctx.lineWidth = 1;
+  ctx.setLineDash([]);
+  for (let i=0; i<=n; i++) {
+    const y = y0 + (h/n)*i;
+    ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x0+w, y); ctx.stroke();
+  }
+}
+
+function axes(ctx, x0, y0, w, h) {
+  ctx.strokeStyle = C.bordure; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0); ctx.lineTo(x0, y0+h); ctx.lineTo(x0+w, y0+h);
+  ctx.stroke();
+}
+
+function titre(ctx, texte, W, y=28) {
+  txt(ctx, texte, W/2, y, {size:14, bold:true, color:C.texte, align:'center'});
+}
+
+function sousTitre(ctx, texte, W, y=46) {
+  txt(ctx, texte, W/2, y, {size:10, color:C.texte3, align:'center'});
+}
+
+function legende(ctx, items, x0, y, gap=120) {
+  items.forEach((item, i) => {
+    const x = x0 + i*gap;
+    rectArr(ctx, x, y-5, 12, 12, 2, item.color);
+    txt(ctx, item.label, x+16, y+1, {size:9.5, color:C.texte2});
+  });
+}
+
+// ── 1. BARRES PRODUCTION ─────────────────────────
 function graphiqueBarresProduction(totaux) {
-  const { canvas, ctx } = creerCanvas(W, H);
-  const PAD = {t:50,r:30,b:70,l:80};
+  const W=860, H=380;
+  const { canvas, ctx } = creer(W, H);
+  const PAD = {t:70, r:30, b:60, l:70};
   const gw = W-PAD.l-PAD.r, gh = H-PAD.t-PAD.b;
 
-  const formats = [
-    {code:'C12',label:'C12',val:totaux.c12||0,col:COULEURS.c12},
-    {code:'C24',label:'C24',val:totaux.c24||0,col:COULEURS.c24},
-    {code:'F615',label:'F6/1,5L',val:totaux.f615||0,col:COULEURS.f615},
-    {code:'F605',label:'F6/0,5L',val:totaux.f605||0,col:COULEURS.f605},
-    {code:'F61',label:'F6/1L',val:totaux.f61||0,col:COULEURS.f61},
-    {code:'HILIO',label:'HILIO',val:totaux.hilio||0,col:COULEURS.hilio},
+  titre(ctx, 'Production mensuelle par format', W);
+  sousTitre(ctx, 'Quantités produites (cartons / fardeaux / packs)', W);
+
+  const data = [
+    {label:'C12',      val:totaux.c12  ||0, color:C.bleu},
+    {label:'C24',      val:totaux.c24  ||0, color:C.cyan},
+    {label:'F6/1,5L',  val:totaux.f615 ||0, color:C.vert},
+    {label:'F6/0,5L',  val:totaux.f605 ||0, color:C.amber},
+    {label:'F6/1L',    val:totaux.f61  ||0, color:C.orange},
+    {label:'HILIO',    val:totaux.hilio||0, color:C.violet},
   ];
 
-  const maxVal = Math.max(...formats.map(f=>f.val), 1);
-  const barW = (gw / formats.length) * 0.6;
-  const gap  = (gw / formats.length);
+  const maxVal = Math.max(...data.map(d=>d.val), 1);
+  const barW = (gw/data.length)*0.55;
+  const gap  = gw/data.length;
 
-  // Titre
-  texte(ctx, 'Production par format (cartons/fardeaux/packs)', W/2, 28, {size:13,bold:true,align:'center',color:COULEURS.text});
-
-  // Grille
-  dessinerGrille(ctx, PAD.l, PAD.t, gw, gh, 5);
-
-  // Axe Y labels
-  for (let i=0; i<=5; i++) {
-    const val = Math.round(maxVal/5*i);
-    const y = PAD.t + gh - (gh/5)*i;
-    texte(ctx, fmt(val), PAD.l-8, y+4, {size:9,color:COULEURS.text2,align:'right'});
-  }
-
-  // Barres
-  formats.forEach((f, i) => {
-    const x = PAD.l + gap*i + (gap-barW)/2;
-    const bh = (f.val/maxVal)*gh;
-    const y  = PAD.t + gh - bh;
-
-    // Barre avec dégradé simulé (barre + reflet)
-    arrondiRect(ctx, x, y, barW, bh, 4, f.col);
-
-    // Reflet clair en haut
-    const grad = ctx.createLinearGradient(x, y, x, y+bh*0.4);
-    grad.addColorStop(0, 'rgba(255,255,255,0.15)');
-    grad.addColorStop(1, 'rgba(255,255,255,0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(x, y, barW, bh*0.4);
-
-    // Valeur au-dessus
-    if (f.val > 0) {
-      texte(ctx, fmt(f.val), x+barW/2, y-6, {size:9,bold:true,align:'center',color:f.col});
-    }
-
-    // Label en bas
-    texte(ctx, f.label, x+barW/2, PAD.t+gh+18, {size:10,align:'center',color:COULEURS.text});
-  });
-
-  // Axes
-  ctx.strokeStyle = COULEURS.text2; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, PAD.t+gh); ctx.lineTo(PAD.l+gw, PAD.t+gh); ctx.stroke();
-
-  return canvas.toBuffer('image/png');
-}
-
-// ── 2. COURBE CA / MB EVOLUTION ─────────────────
-function graphiqueCourbeCA(historique) {
-  const { canvas, ctx } = creerCanvas(W, H);
-  const PAD = {t:50,r:30,b:70,l:90};
-  const gw = W-PAD.l-PAD.r, gh = H-PAD.t-PAD.b;
-
-  if (!historique || historique.length < 2) {
-    texte(ctx, 'Historique insuffisant (minimum 2 mois)', W/2, H/2, {size:13,align:'center',color:COULEURS.text2});
-    return canvas.toBuffer('image/png');
-  }
-
-  const maxCA = Math.max(...historique.map(m=>parseFloat(m.ca_ht||0)), 1);
-  const series = [
-    { key:'ca_ht', label:'CA HT', color:COULEURS.c12, pts:[] },
-    { key:'mb_ht', label:'MB HT', color:COULEURS.f615, pts:[] },
-  ];
-
-  historique.forEach((m, i) => {
-    const x = PAD.l + (gw/(historique.length-1))*i;
-    series.forEach(s => {
-      const val = parseFloat(m[s.key]||0);
-      const y = PAD.t + gh - (val/maxCA)*gh;
-      s.pts.push({x, y, val});
-    });
-  });
-
-  texte(ctx, 'Évolution CA HT et MB HT (FCFA)', W/2, 28, {size:13,bold:true,align:'center'});
-  dessinerGrille(ctx, PAD.l, PAD.t, gw, gh, 5);
+  grille(ctx, PAD.l, PAD.t, gw, gh);
 
   // Axe Y
   for (let i=0; i<=5; i++) {
-    const val = Math.round(maxCA/5*i);
+    const v = Math.round(maxVal/5*i);
     const y = PAD.t + gh - (gh/5)*i;
-    texte(ctx, fmt(val), PAD.l-8, y+4, {size:8,color:COULEURS.text2,align:'right'});
+    txt(ctx, fmt(v), PAD.l-8, y, {size:9, color:C.texte3, align:'right'});
+    if (i>0) { ctx.strokeStyle=C.grille; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(PAD.l, y); ctx.lineTo(PAD.l+gw, y); ctx.stroke(); }
   }
 
-  // Zone sous la courbe CA
+  data.forEach((d, i) => {
+    const x  = PAD.l + gap*i + (gap-barW)/2;
+    const bh = Math.max((d.val/maxVal)*gh, 2);
+    const y  = PAD.t + gh - bh;
+
+    // Ombre douce
+    ctx.shadowColor = 'rgba(0,0,0,0.08)';
+    ctx.shadowBlur  = 6; ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 3;
+    rectArr(ctx, x, y, barW, bh, 5, d.color);
+    ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+
+    // Valeur au-dessus
+    if (d.val > 0) {
+      txt(ctx, fmt(d.val), x+barW/2, y-10, {size:9.5, bold:true, color:d.color, align:'center'});
+    }
+    txt(ctx, d.label, x+barW/2, PAD.t+gh+22, {size:10.5, color:C.texte2, align:'center'});
+  });
+
+  axes(ctx, PAD.l, PAD.t, gw, gh);
+
+  // Ligne de fond gris pour les barres
+  ctx.fillStyle = C.fond2;
+  data.forEach((d, i) => {
+    const x = PAD.l + gap*i + (gap-barW)/2;
+    ctx.fillRect(x, PAD.t, barW, gh);
+  });
+  // Redessiner les barres par-dessus
+  data.forEach((d, i) => {
+    const x  = PAD.l + gap*i + (gap-barW)/2;
+    const bh = Math.max((d.val/maxVal)*gh, 2);
+    const y  = PAD.t + gh - bh;
+    rectArr(ctx, x, y, barW, bh, 5, d.color);
+    if (d.val > 0) txt(ctx, fmt(d.val), x+barW/2, y-10, {size:9.5, bold:true, color:d.color, align:'center'});
+  });
+
+  axes(ctx, PAD.l, PAD.t, gw, gh);
+  return canvas.toBuffer('image/png');
+}
+
+// ── 2. COURBE EVOLUTION CA/MB ────────────────────
+function graphiqueCourbeCA(historique) {
+  const W=860, H=360;
+  const { canvas, ctx } = creer(W, H);
+  const PAD = {t:70, r:30, b:55, l:80};
+  const gw = W-PAD.l-PAD.r, gh = H-PAD.t-PAD.b;
+
+  if (!historique || historique.length < 2) {
+    txt(ctx, 'Données insuffisantes (minimum 2 mois requis)', W/2, H/2, {size:12, color:C.texte3, align:'center'});
+    return canvas.toBuffer('image/png');
+  }
+
+  titre(ctx, 'Évolution CA HT et Marge Brute', W);
+  sousTitre(ctx, 'Tendance mensuelle en FCFA', W);
+
+  const maxVal = Math.max(...historique.map(m=>parseFloat(m.ca_ht||0)), 1);
+  const series = [
+    {key:'ca_ht', label:'CA HT',    color:C.bleu,   dash:[]},
+    {key:'mb_ht', label:'MB HT',    color:C.vert,   dash:[6,3]},
+  ];
+
+  grille(ctx, PAD.l, PAD.t, gw, gh);
+
+  // Axe Y
+  for (let i=0; i<=5; i++) {
+    const v = Math.round(maxVal/5*i);
+    const y = PAD.t + gh - (gh/5)*i;
+    txt(ctx, fmt(v), PAD.l-8, y, {size:8.5, color:C.texte3, align:'right'});
+  }
+
+  // Zone sous CA
+  const ptsCa = historique.map((m,i)=>({
+    x: PAD.l + (gw/(historique.length-1))*i,
+    y: PAD.t + gh - (parseFloat(m.ca_ht||0)/maxVal)*gh,
+  }));
   ctx.beginPath();
-  ctx.moveTo(series[0].pts[0].x, PAD.t+gh);
-  series[0].pts.forEach(p => ctx.lineTo(p.x, p.y));
-  ctx.lineTo(series[0].pts[series[0].pts.length-1].x, PAD.t+gh);
+  ctx.moveTo(ptsCa[0].x, PAD.t+gh);
+  ptsCa.forEach(p => ctx.lineTo(p.x, p.y));
+  ctx.lineTo(ptsCa[ptsCa.length-1].x, PAD.t+gh);
   ctx.closePath();
   const grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t+gh);
-  grad.addColorStop(0, 'rgba(8,145,178,0.25)');
-  grad.addColorStop(1, 'rgba(8,145,178,0.02)');
+  grad.addColorStop(0, 'rgba(26,111,176,0.15)');
+  grad.addColorStop(1, 'rgba(26,111,176,0.01)');
   ctx.fillStyle = grad; ctx.fill();
 
   // Courbes
   series.forEach(s => {
-    ctx.beginPath(); ctx.moveTo(s.pts[0].x, s.pts[0].y);
-    s.pts.forEach(p => ctx.lineTo(p.x, p.y));
+    const pts = historique.map((m,i)=>({
+      x: PAD.l + (gw/(historique.length-1))*i,
+      y: PAD.t + gh - (parseFloat(m[s.key]||0)/maxVal)*gh,
+    }));
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    pts.forEach(p => ctx.lineTo(p.x, p.y));
     ctx.strokeStyle = s.color; ctx.lineWidth = 2.5;
-    ctx.setLineDash(s.key==='mb_ht'?[6,3]:[]);
-    ctx.stroke(); ctx.setLineDash([]);
+    ctx.setLineDash(s.dash); ctx.stroke(); ctx.setLineDash([]);
 
     // Points
-    s.pts.forEach(p => {
-      ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI*2);
-      ctx.fillStyle = s.color; ctx.fill();
-      ctx.strokeStyle = COULEURS.bg2; ctx.lineWidth = 1.5; ctx.stroke();
+    pts.forEach(p => {
+      ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
+      ctx.fillStyle = C.blanc; ctx.fill();
+      ctx.strokeStyle = s.color; ctx.lineWidth = 2.5; ctx.stroke();
     });
   });
 
   // Labels X
   historique.forEach((m, i) => {
     const x = PAD.l + (gw/(historique.length-1))*i;
-    texte(ctx, m.mois?.slice(0,7)||'', x, PAD.t+gh+18, {size:9,align:'center',color:COULEURS.text2});
+    txt(ctx, (m.mois||'').slice(0,7), x, PAD.t+gh+22, {size:9, color:C.texte3, align:'center'});
   });
 
-  // Légende
-  series.forEach((s,i) => {
-    const lx = PAD.l + i*120;
-    arrondiRect(ctx, lx, H-20, 12, 3, 2, s.color);
-    texte(ctx, s.label, lx+16, H-16, {size:10,color:COULEURS.text});
-  });
-
-  ctx.strokeStyle = COULEURS.text2; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, PAD.t+gh); ctx.lineTo(PAD.l+gw, PAD.t+gh); ctx.stroke();
-
+  axes(ctx, PAD.l, PAD.t, gw, gh);
+  legende(ctx, series.map(s=>({label:s.label,color:s.color})), PAD.l, H-10);
   return canvas.toBuffer('image/png');
 }
 
-// ── 3. CAMEMBERT RÉPARTITION MBHTP ──────────────
+// ── 3. DONUT RÉPARTITION MB ──────────────────────
 function graphiqueCamembertMB(bmf, fs, amm) {
-  const { canvas, ctx } = creerCanvas(420, 340);
-  const cx = 180, cy = 170, r = 120;
-  const total = bmf + fs + amm;
-  if (total === 0) return null;
+  const W=500, H=300;
+  const { canvas, ctx } = creer(W, H);
+  const cx=160, cy=155, r=105, ri=58;
+  const total = bmf+fs+amm;
+  if (!total) return null;
 
-  texte(ctx, 'Répartition MBHTP', 210, 24, {size:13,bold:true,align:'center'});
+  titre(ctx, 'Répartition de la Marge Brute', W);
 
   const slices = [
-    { label:'BMF',          val:bmf, color:COULEURS.c12  },
-    { label:'Frais Siège',  val:fs,  color:COULEURS.f615  },
-    { label:'Amortissement',val:amm, color:COULEURS.c24   },
+    {label:'BMF',           val:bmf, color:C.bleu},
+    {label:'Frais Siège',   val:fs,  color:C.vert},
+    {label:'Amortissement', val:amm, color:C.violet},
   ];
 
   let angle = -Math.PI/2;
   slices.forEach(s => {
-    const sweep = (s.val/total) * Math.PI * 2;
+    const sweep = (s.val/total)*Math.PI*2;
     ctx.beginPath();
     ctx.moveTo(cx, cy);
     ctx.arc(cx, cy, r, angle, angle+sweep);
     ctx.closePath();
-    ctx.fillStyle = s.color; ctx.fill();
-    ctx.strokeStyle = COULEURS.bg2; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = s.color;
+    ctx.shadowColor = 'rgba(0,0,0,0.08)'; ctx.shadowBlur=4; ctx.shadowOffsetY=2;
+    ctx.fill();
+    ctx.shadowBlur=0; ctx.shadowOffsetY=0;
+    ctx.strokeStyle = C.blanc; ctx.lineWidth=2; ctx.stroke();
 
-    // Étiquette pourcentage
-    const midA = angle + sweep/2;
-    const lx = cx + Math.cos(midA)*r*0.65;
-    const ly = cy + Math.sin(midA)*r*0.65;
-    texte(ctx, ((s.val/total)*100).toFixed(1)+'%', lx, ly+4, {size:11,bold:true,align:'center'});
+    // Pourcentage
+    const mid = angle+sweep/2;
+    const lx = cx+Math.cos(mid)*r*0.68;
+    const ly = cy+Math.sin(mid)*r*0.68;
+    txt(ctx, ((s.val/total)*100).toFixed(1)+'%', lx, ly, {size:10.5,bold:true,color:C.blanc,align:'center'});
     angle += sweep;
   });
 
-  // Cercle central (donut)
-  ctx.beginPath(); ctx.arc(cx, cy, r*0.45, 0, Math.PI*2);
-  ctx.fillStyle = COULEURS.bg2; ctx.fill();
-  texte(ctx, fmt(total), cx, cy-4, {size:11,bold:true,align:'center'});
-  texte(ctx, 'FCFA', cx, cy+12, {size:9,align:'center',color:COULEURS.text2});
+  // Centre donut blanc
+  ctx.beginPath(); ctx.arc(cx, cy, ri, 0, Math.PI*2);
+  ctx.fillStyle = C.blanc;
+  ctx.shadowColor = 'rgba(0,0,0,0.06)'; ctx.shadowBlur=8;
+  ctx.fill(); ctx.shadowBlur=0;
+  txt(ctx, fmt(total), cx, cy-7, {size:11,bold:true,color:C.texte,align:'center'});
+  txt(ctx, 'FCFA', cx, cy+9, {size:9,color:C.texte3,align:'center'});
+  txt(ctx, 'total', cx, cy+22, {size:8.5,color:C.texte3,align:'center'});
 
-  // Légende
+  // Légende à droite
   slices.forEach((s, i) => {
-    const ly = 80 + i*32;
-    arrondiRect(ctx, 316, ly, 14, 14, 3, s.color);
-    texte(ctx, s.label, 336, ly+11, {size:10});
-    texte(ctx, fmt(s.val)+' F', 336, ly+23, {size:9,color:COULEURS.text2});
+    const ly = 90 + i*52;
+    rectArr(ctx, 300, ly, 14, 14, 3, s.color);
+    txt(ctx, s.label, 320, ly+7, {size:10.5,color:C.texte});
+    txt(ctx, fmt(s.val)+' FCFA', 320, ly+22, {size:9.5,color:C.texte2});
+    txt(ctx, ((s.val/total)*100).toFixed(1)+'%', 460, ly+7, {size:10,bold:true,color:s.color,align:'right'});
   });
 
   return canvas.toBuffer('image/png');
 }
 
-// ── 4. BARRES AVANCEMENT ATP ─────────────────────
+// ── 4. BARRES GROUPÉES ATP ───────────────────────
 function graphiqueAvancementATP(objectifs, realisations) {
+  const W=860, H=320;
+  const { canvas, ctx } = creer(W, H);
+  const PAD = {t:70, r:30, b:55, l:70};
+  const gw = W-PAD.l-PAD.r, gh = H-PAD.t-PAD.b;
   const codes = ['C12','C24','F615','F605','F61','HILIO'];
-  const { canvas, ctx } = creerCanvas(W, 300);
-  const PAD = {t:45,r:30,b:55,l:90};
-  const gw = W-PAD.l-PAD.r, gh = 300-PAD.t-PAD.b;
 
-  texte(ctx, 'Avancement ATP — Objectifs vs Réalisations', W/2, 26, {size:13,bold:true,align:'center'});
+  titre(ctx, 'ATP — Objectifs vs Réalisations', W);
+  sousTitre(ctx, 'Comparaison par format de production', W);
 
   const maxVal = Math.max(...codes.flatMap(c=>[objectifs[c]||0,realisations[c]||0]),1);
   const grpW = gw/codes.length;
-  const barW = grpW*0.3;
+  const barW = grpW*0.28;
 
-  dessinerGrille(ctx, PAD.l, PAD.t, gw, gh, 4);
+  grille(ctx, PAD.l, PAD.t, gw, gh);
+
+  for (let i=0; i<=5; i++) {
+    const v = Math.round(maxVal/5*i);
+    const y = PAD.t + gh - (gh/5)*i;
+    txt(ctx, fmt(v), PAD.l-8, y, {size:8.5, color:C.texte3, align:'right'});
+  }
 
   codes.forEach((code, i) => {
     const obj  = objectifs[code]||0;
     const real = realisations[code]||0;
-    const x0   = PAD.l + grpW*i + grpW*0.05;
+    const x0   = PAD.l + grpW*i + grpW*0.1;
+    const tx   = obj>0?real/obj:0;
 
-    // Barre objectif (semi-transparent)
-    const bhObj  = (obj/maxVal)*gh;
-    ctx.fillStyle = 'rgba(148,163,184,0.3)';
-    ctx.fillRect(x0, PAD.t+gh-bhObj, barW, bhObj);
-    ctx.strokeStyle = '#94A3B8'; ctx.lineWidth=1;
-    ctx.strokeRect(x0, PAD.t+gh-bhObj, barW, bhObj);
+    // Barre objectif (gris clair)
+    const bhO = Math.max((obj/maxVal)*gh, 2);
+    rectArr(ctx, x0, PAD.t+gh-bhO, barW, bhO, 4, C.fond2);
+    ctx.strokeStyle = C.bordure; ctx.lineWidth=1.5;
+    ctx.strokeRect(x0, PAD.t+gh-bhO, barW, bhO);
 
     // Barre réalisation
-    const bhReal = (real/maxVal)*gh;
-    const txAvancement = obj>0?real/obj:0;
-    const col = txAvancement>=0.9?COULEURS.f615:txAvancement>=0.7?COULEURS.f605:COULEURS.f61;
-    arrondiRect(ctx, x0+barW+2, PAD.t+gh-bhReal, barW, bhReal, 3, col);
+    const bhR = Math.max((real/maxVal)*gh, 2);
+    const col = tx>=0.90?C.vert:tx>=0.70?C.amber:C.rouge;
+    rectArr(ctx, x0+barW+4, PAD.t+gh-bhR, barW, bhR, 4, col);
 
-    // Taux
-    texte(ctx, obj>0?((real/obj)*100).toFixed(0)+'%':'--',
-      x0+barW+2+barW/2, PAD.t+gh-bhReal-8, {size:9,bold:true,align:'center',color:col});
+    // Taux d'avancement
+    txt(ctx, obj>0?Math.round(tx*100)+'%':'—',
+      x0+barW+4+barW/2, PAD.t+gh-bhR-12,
+      {size:9,bold:true,color:col,align:'center'});
 
-    texte(ctx, code, x0+barW+1, PAD.t+gh+16, {size:10,align:'center',color:COULEURS.text});
+    txt(ctx, code, x0+barW+2, PAD.t+gh+22, {size:10,color:C.texte2,align:'center'});
   });
 
-  // Légende
-  ctx.fillStyle = 'rgba(148,163,184,0.3)';
-  ctx.fillRect(PAD.l, 270, 12, 12);
-  texte(ctx, 'Objectif', PAD.l+16, 281, {size:10,color:COULEURS.text2});
-  arrondiRect(ctx, PAD.l+100, 270, 12, 12, 2, COULEURS.f615);
-  texte(ctx, 'Réalisation', PAD.l+116, 281, {size:10,color:COULEURS.text2});
-
-  ctx.strokeStyle = COULEURS.text2; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, PAD.t+gh); ctx.lineTo(PAD.l+gw, PAD.t+gh); ctx.stroke();
-
+  axes(ctx, PAD.l, PAD.t, gw, gh);
+  legende(ctx, [
+    {label:'Objectif',     color:C.fond2},
+    {label:'Réalisation',  color:C.vert},
+  ], PAD.l, H-10);
   return canvas.toBuffer('image/png');
 }
 
-// ── 5. BARRES STOCKS PAR CLASSE ──────────────────
+// ── 5. BARRES HORIZONTALES STOCKS ───────────────
 function graphiqueStocks(articles) {
-  if (!articles || articles.length === 0) return null;
-  const top = articles.filter(a=>parseFloat(a.stock_actuel||0)>0).slice(0,10);
-  if (top.length === 0) return null;
+  if (!articles||!articles.length) return null;
+  const top = articles.filter(a=>parseFloat(a.valeur_stock_ht||0)>0)
+    .sort((a,b)=>parseFloat(b.valeur_stock_ht||0)-parseFloat(a.valeur_stock_ht||0))
+    .slice(0,8);
+  if (!top.length) return null;
 
-  const h = Math.max(300, top.length*32+80);
-  const { canvas, ctx } = creerCanvas(W, h);
-  const PAD = {t:40,r:120,b:30,l:160};
-  const gw = W-PAD.l-PAD.r, gh = h-PAD.t-PAD.b;
+  const H = top.length*42+90;
+  const W = 860;
+  const { canvas, ctx } = creer(W, H);
+  const PAD = {t:60, r:100, b:20, l:180};
+  const gw = W-PAD.l-PAD.r, gh = H-PAD.t-PAD.b;
 
-  texte(ctx, 'Top articles en stock (valeur HT)', W/2, 24, {size:13,bold:true,align:'center'});
+  titre(ctx, 'Valeur des stocks — Top articles', W);
+  sousTitre(ctx, 'En FCFA HT', W);
 
   const maxVal = Math.max(...top.map(a=>parseFloat(a.valeur_stock_ht||0)),1);
-  const barH = (gh/top.length)*0.6;
+  const barH = (gh/top.length)*0.55;
   const gap  = gh/top.length;
 
   top.forEach((art, i) => {
-    const val = parseFloat(art.valeur_stock_ht||0);
-    const bw  = (val/maxVal)*gw;
-    const y   = PAD.t + gap*i + (gap-barH)/2;
+    const val  = parseFloat(art.valeur_stock_ht||0);
+    const bw   = (val/maxVal)*gw;
+    const y    = PAD.t + gap*i + (gap-barH)/2;
     const stock = parseFloat(art.stock_actuel||0);
-    const isAlert = art.seuil_alerte && stock <= art.seuil_alerte;
-    const col = isAlert ? COULEURS.f605 : COULEURS.c12;
+    const alert = art.seuil_alerte && stock<=art.seuil_alerte;
+    const col  = alert ? C.orange : (i%2===0?C.bleu:C.cyan);
 
-    arrondiRect(ctx, PAD.l, y, Math.max(bw,2), barH, 3, col);
+    // Barre fond
+    rectArr(ctx, PAD.l, y, gw, barH, 4, C.fond2);
+    // Barre valeur
+    ctx.shadowColor='rgba(0,0,0,0.08)'; ctx.shadowBlur=4;
+    rectArr(ctx, PAD.l, y, Math.max(bw,4), barH, 4, col);
+    ctx.shadowBlur=0;
 
-    // Libellé
-    const lbl = (art.libelle||'').slice(0,22);
-    texte(ctx, lbl, PAD.l-6, y+barH/2+4, {size:9,align:'right',color:COULEURS.text});
+    // Label gauche
+    const lbl = (art.libelle||art.code||'').slice(0,24);
+    txt(ctx, lbl, PAD.l-8, y+barH/2, {size:9.5, color:C.texte, align:'right'});
 
-    // Valeur
-    texte(ctx, fmt(val)+' FCFA', PAD.l+bw+6, y+barH/2+4, {size:9,color:col});
+    // Valeur droite
+    txt(ctx, fmt(val)+' F', PAD.l+bw+8, y+barH/2, {size:9, color:col});
+    if (alert) txt(ctx, '⚠', PAD.l+gw+8, y+barH/2, {size:10, color:C.orange});
   });
 
   return canvas.toBuffer('image/png');
 }
 
-// ── 6. TRÉSORERIE — FLUX ENTRÉES/SORTIES ─────────
+// ── 6. BARRES FLUX TRÉSORERIE ────────────────────
 function graphiqueFluxTresorerie(mouvements) {
-  if (!mouvements || mouvements.length === 0) return null;
+  if (!mouvements||!mouvements.length) return null;
+  const comptes={};
+  mouvements.forEach(m=>{
+    const lbl = (m.compte_libelle||'Inconnu').replace('Compte ','').replace(' (usine)','');
+    if(!comptes[lbl]) comptes[lbl]={e:0,s:0};
+    if(m.sens==='credit') comptes[lbl].e+=parseFloat(m.montant_fcfa||0);
+    else comptes[lbl].s+=parseFloat(m.montant_fcfa||0);
+  });
+  const data=Object.entries(comptes);
+  if(!data.length) return null;
 
-  // Agréger par compte
-  const comptes = {};
-  mouvements.forEach(m => {
-    const lbl = m.compte_libelle || 'Inconnu';
-    if (!comptes[lbl]) comptes[lbl] = {entrees:0, sorties:0};
-    if (m.sens==='credit') comptes[lbl].entrees += parseFloat(m.montant_fcfa||0);
-    else comptes[lbl].sorties += parseFloat(m.montant_fcfa||0);
+  const W=860, H=340;
+  const { canvas, ctx } = creer(W, H);
+  const PAD={t:70,r:30,b:60,l:80};
+  const gw=W-PAD.l-PAD.r, gh=H-PAD.t-PAD.b;
+
+  titre(ctx, 'Flux de Trésorerie par Compte', W);
+  sousTitre(ctx, 'Entrées et sorties en FCFA', W);
+
+  const maxVal=Math.max(...data.flatMap(([,v])=>[v.e,v.s]),1);
+  const grpW=gw/data.length, barW=grpW*0.3;
+
+  grille(ctx, PAD.l, PAD.t, gw, gh);
+  for(let i=0;i<=5;i++){
+    const v=Math.round(maxVal/5*i), y=PAD.t+gh-(gh/5)*i;
+    txt(ctx,fmt(v),PAD.l-8,y,{size:8.5,color:C.texte3,align:'right'});
+  }
+
+  data.forEach(([compte,vals],i)=>{
+    const x0=PAD.l+grpW*i+grpW*0.07;
+    if(vals.e>0){
+      const bh=Math.max((vals.e/maxVal)*gh,2);
+      ctx.shadowColor='rgba(0,0,0,0.08)';ctx.shadowBlur=4;
+      rectArr(ctx,x0,PAD.t+gh-bh,barW,bh,4,C.vert);
+      ctx.shadowBlur=0;
+      txt(ctx,fmt(vals.e),x0+barW/2,PAD.t+gh-bh-10,{size:8.5,bold:true,color:C.vert,align:'center'});
+    }
+    if(vals.s>0){
+      const bh=Math.max((vals.s/maxVal)*gh,2);
+      ctx.shadowColor='rgba(0,0,0,0.08)';ctx.shadowBlur=4;
+      rectArr(ctx,x0+barW+4,PAD.t+gh-bh,barW,bh,4,C.rouge);
+      ctx.shadowBlur=0;
+      txt(ctx,fmt(vals.s),x0+barW+4+barW/2,PAD.t+gh-bh-10,{size:8.5,bold:true,color:C.rouge,align:'center'});
+    }
+    txt(ctx,compte.slice(0,14),x0+barW+2,PAD.t+gh+22,{size:9,color:C.texte2,align:'center'});
   });
 
-  const data = Object.entries(comptes);
-  if (data.length === 0) return null;
-
-  const { canvas, ctx } = creerCanvas(W, 320);
-  const PAD = {t:45,r:30,b:60,l:90};
-  const gw = W-PAD.l-PAD.r, gh = 320-PAD.t-PAD.b;
-
-  texte(ctx, 'Flux de trésorerie par compte (FCFA)', W/2, 26, {size:13,bold:true,align:'center'});
-
-  const maxVal = Math.max(...data.flatMap(([,v])=>[v.entrees,v.sorties]),1);
-  const grpW = gw/data.length;
-  const barW = grpW*0.28;
-
-  dessinerGrille(ctx, PAD.l, PAD.t, gw, gh, 4);
-
-  data.forEach(([compte, vals], i) => {
-    const x0 = PAD.l + grpW*i + grpW*0.07;
-
-    if (vals.entrees > 0) {
-      const bh = (vals.entrees/maxVal)*gh;
-      arrondiRect(ctx, x0, PAD.t+gh-bh, barW, bh, 3, COULEURS.f615);
-      texte(ctx, fmt(vals.entrees), x0+barW/2, PAD.t+gh-bh-7, {size:8,align:'center',color:COULEURS.f615});
-    }
-    if (vals.sorties > 0) {
-      const bh = (vals.sorties/maxVal)*gh;
-      arrondiRect(ctx, x0+barW+3, PAD.t+gh-bh, barW, bh, 3, COULEURS.f61);
-      texte(ctx, fmt(vals.sorties), x0+barW+3+barW/2, PAD.t+gh-bh-7, {size:8,align:'center',color:COULEURS.f61});
-    }
-
-    const lbl = compte.slice(0,12);
-    texte(ctx, lbl, x0+barW, PAD.t+gh+16, {size:9,align:'center',color:COULEURS.text2});
-  });
-
-  // Légende
-  arrondiRect(ctx, PAD.l, 300, 12, 10, 2, COULEURS.f615);
-  texte(ctx, 'Entrées', PAD.l+16, 310, {size:10});
-  arrondiRect(ctx, PAD.l+90, 300, 12, 10, 2, COULEURS.f61);
-  texte(ctx, 'Sorties', PAD.l+106, 310, {size:10});
-
-  ctx.strokeStyle = COULEURS.text2; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, PAD.t+gh); ctx.lineTo(PAD.l+gw, PAD.t+gh); ctx.stroke();
-
+  axes(ctx,PAD.l,PAD.t,gw,gh);
+  legende(ctx,[{label:'Entrées',color:C.vert},{label:'Sorties',color:C.rouge}],PAD.l,H-10);
   return canvas.toBuffer('image/png');
 }
 
-// ── 7. JAUGE UTILISATION USINE ───────────────────
+// ── 7. JAUGE DEMI-CERCLE UTILISATION ────────────
 function graphiqueJaugeUsine(tauxUtilisation) {
-  const { canvas, ctx } = creerCanvas(300, 220);
-  const cx=150, cy=160, r=110, rInt=70;
+  const W=400, H=240;
+  const { canvas, ctx } = creer(W, H);
+  const cx=200, cy=185, r=120, ri=72;
+  const taux=Math.min(Math.max(tauxUtilisation,0),1);
+  const col=taux>=0.80?C.vert:taux>=0.60?C.amber:C.rouge;
 
-  texte(ctx, 'Utilisation usine', 150, 20, {size:12,bold:true,align:'center'});
+  titre(ctx, "Taux d'utilisation de l'usine", W);
 
-  // Arc fond
-  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 0);
-  ctx.strokeStyle = COULEURS.bg3; ctx.lineWidth=28; ctx.stroke();
+  // Fond gris arc
+  ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,0,false);
+  ctx.strokeStyle=C.fond2; ctx.lineWidth=22; ctx.stroke();
+  ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,0,false);
+  ctx.strokeStyle=C.bordure; ctx.lineWidth=22; ctx.stroke();
 
-  // Arc valeur
-  const taux = Math.min(tauxUtilisation, 1);
-  const col = taux>=0.80?COULEURS.f615:taux>=0.60?COULEURS.f605:COULEURS.f61;
-  ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, Math.PI + taux*Math.PI);
-  ctx.strokeStyle = col; ctx.lineWidth=28; ctx.stroke();
+  // Arc valeur avec dégradé
+  if(taux>0){
+    ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI,Math.PI+taux*Math.PI,false);
+    ctx.strokeStyle=col; ctx.lineWidth=22;
+    ctx.lineCap='round'; ctx.stroke(); ctx.lineCap='butt';
+  }
 
-  // Aiguille
-  const angle = Math.PI + taux*Math.PI;
-  const ax = cx + Math.cos(angle)*(r-14);
-  const ay = cy + Math.sin(angle)*(r-14);
-  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ax, ay);
-  ctx.strokeStyle = COULEURS.text; ctx.lineWidth=3; ctx.stroke();
-  ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI*2);
-  ctx.fillStyle = COULEURS.text; ctx.fill();
+  // Centre blanc
+  ctx.beginPath(); ctx.arc(cx,cy,ri,0,Math.PI*2);
+  ctx.fillStyle=C.blanc;
+  ctx.shadowColor='rgba(0,0,0,0.06)';ctx.shadowBlur=8;
+  ctx.fill();ctx.shadowBlur=0;
 
   // Valeur centrale
-  texte(ctx, (taux*100).toFixed(1)+'%', cx, cy-10, {size:22,bold:true,align:'center',color:col});
-  texte(ctx, 'taux utilisation', cx, cy+10, {size:10,align:'center',color:COULEURS.text2});
+  txt(ctx,(taux*100).toFixed(1)+'%',cx,cy-12,{size:26,bold:true,color:col,align:'center'});
+  txt(ctx,"utilisation",cx,cy+10,{size:10.5,color:C.texte3,align:'center'});
 
-  // Graduation 0% et 100%
-  texte(ctx, '0%',  cx-r-10, cy+8, {size:9,color:COULEURS.text2});
-  texte(ctx, '100%',cx+r-20,  cy+8, {size:9,color:COULEURS.text2});
+  // Marqueurs 0% et 100%
+  txt(ctx,'0%',   cx-r-12, cy+12, {size:9,color:C.texte3,align:'center'});
+  txt(ctx,'100%', cx+r+12, cy+12, {size:9,color:C.texte3,align:'center'});
+  txt(ctx,'50%',  cx,      cy-r-12,{size:9,color:C.texte3,align:'center'});
+
+  // Bande colorée selon niveau
+  const lgd = col===C.vert?'Niveau optimal (≥80%)'
+             :col===C.amber?'Niveau acceptable (60-80%)'
+             :'Niveau insuffisant (<60%)';
+  txt(ctx,lgd,cx,cy+30,{size:9.5,color:col,align:'center'});
 
   return canvas.toBuffer('image/png');
 }
 
-// ── 8. GRAPHIQUE REMBOURSEMENT DETTE ─────────────
+// ── 8. COURBE REMBOURSEMENT DETTE ───────────────
 function graphiqueRemboursement(credits_total, capaciteRemb) {
-  if (!credits_total || credits_total === 0) return null;
-  const duree = Math.min(Math.ceil(credits_total/capaciteRemb), 18);
-  if (duree <= 0 || !isFinite(duree)) return null;
+  if(!credits_total||credits_total===0||capaciteRemb<=0) return null;
+  const duree=Math.min(Math.ceil(credits_total/capaciteRemb),24);
+  if(!isFinite(duree)||duree<=0) return null;
 
-  const { canvas, ctx } = creerCanvas(W, 300);
-  const PAD = {t:45,r:30,b:60,l:90};
-  const gw = W-PAD.l-PAD.r, gh = 300-PAD.t-PAD.b;
+  const W=860, H=320;
+  const { canvas, ctx } = creer(W, H);
+  const PAD={t:70,r:30,b:55,l:80};
+  const gw=W-PAD.l-PAD.r, gh=H-PAD.t-PAD.b;
 
-  texte(ctx, 'Plan de remboursement prévisionnel (FCFA)', W/2, 26, {size:13,bold:true,align:'center'});
+  titre(ctx,'Plan de remboursement de la dette',W);
+  sousTitre(ctx,'Capital restant dû mois par mois (FCFA)',W);
 
-  const pts = [];
-  let restant = credits_total;
-  for (let i=0; i<=duree; i++) {
-    pts.push({i, restant: Math.max(0, restant)});
-    restant -= capaciteRemb;
+  const pts=[];
+  let restant=credits_total;
+  for(let i=0;i<=duree;i++){
+    pts.push({i,restant:Math.max(0,restant)});
+    restant-=capaciteRemb;
   }
 
-  const maxVal = credits_total;
-  const xStep  = gw / duree;
+  grille(ctx,PAD.l,PAD.t,gw,gh);
+  for(let i=0;i<=5;i++){
+    const v=Math.round(credits_total/5*i),y=PAD.t+gh-(gh/5)*i;
+    txt(ctx,fmt(v),PAD.l-8,y,{size:8.5,color:C.texte3,align:'right'});
+  }
 
-  dessinerGrille(ctx, PAD.l, PAD.t, gw, gh, 4);
-
-  // Zone sous la courbe
+  // Zone sous courbe
   ctx.beginPath();
-  ctx.moveTo(PAD.l, PAD.t+gh);
-  pts.forEach(p => {
-    const x = PAD.l + p.i*xStep;
-    const y = PAD.t + gh - (p.restant/maxVal)*gh;
-    ctx.lineTo(x, y);
-  });
-  ctx.lineTo(PAD.l+gw, PAD.t+gh);
+  ctx.moveTo(PAD.l,PAD.t+gh);
+  pts.forEach(p=>{ const x=PAD.l+(gw/duree)*p.i,y=PAD.t+gh-(p.restant/credits_total)*gh; ctx.lineTo(x,y); });
+  ctx.lineTo(PAD.l+gw*(Math.min(duree,pts.length-1)/duree),PAD.t+gh);
   ctx.closePath();
-  const grad = ctx.createLinearGradient(0, PAD.t, 0, PAD.t+gh);
-  grad.addColorStop(0, 'rgba(220,38,38,0.3)');
-  grad.addColorStop(1, 'rgba(220,38,38,0.03)');
-  ctx.fillStyle = grad; ctx.fill();
+  const grad=ctx.createLinearGradient(0,PAD.t,0,PAD.t+gh);
+  grad.addColorStop(0,'rgba(220,38,38,0.12)');
+  grad.addColorStop(1,'rgba(220,38,38,0.01)');
+  ctx.fillStyle=grad;ctx.fill();
 
   // Courbe
-  ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t + gh - (pts[0].restant/maxVal)*gh);
-  pts.forEach(p => {
-    const x = PAD.l + p.i*xStep;
-    const y = PAD.t + gh - (p.restant/maxVal)*gh;
-    ctx.lineTo(x, y);
-  });
-  ctx.strokeStyle = COULEURS.f61; ctx.lineWidth=2.5; ctx.stroke();
+  ctx.beginPath();
+  pts.forEach((p,i)=>{ const x=PAD.l+(gw/duree)*p.i,y=PAD.t+gh-(p.restant/credits_total)*gh; i===0?ctx.moveTo(x,y):ctx.lineTo(x,y); });
+  ctx.strokeStyle=C.rouge;ctx.lineWidth=2.5;ctx.stroke();
 
-  // Labels
-  pts.forEach(p => {
-    if (p.i % Math.ceil(duree/6) === 0) {
-      const x = PAD.l + p.i*xStep;
-      texte(ctx, 'M'+p.i, x, PAD.t+gh+18, {size:9,align:'center',color:COULEURS.text2});
-    }
+  // Points clés
+  pts.filter(p=>p.i%Math.ceil(duree/6)===0||p.restant===0).forEach(p=>{
+    const x=PAD.l+(gw/duree)*p.i,y=PAD.t+gh-(p.restant/credits_total)*gh;
+    ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);
+    ctx.fillStyle=C.blanc;ctx.fill();
+    ctx.strokeStyle=C.rouge;ctx.lineWidth=2.5;ctx.stroke();
+    txt(ctx,'M'+p.i,x,PAD.t+gh+22,{size:9,color:C.texte3,align:'center'});
   });
 
-  for (let i=0; i<=4; i++) {
-    const val = Math.round(maxVal/4*i);
-    const y = PAD.t + gh - (gh/4)*i;
-    texte(ctx, fmt(val), PAD.l-8, y+4, {size:8,align:'right',color:COULEURS.text2});
+  // Marqueur solde 0
+  if(duree<=24){
+    ctx.strokeStyle=C.vert;ctx.lineWidth=1.5;ctx.setLineDash([4,3]);
+    ctx.beginPath();ctx.moveTo(PAD.l+gw*(duree/duree),PAD.t);ctx.lineTo(PAD.l+gw,PAD.t+gh);ctx.stroke();
+    ctx.setLineDash([]);
   }
 
-  ctx.strokeStyle = COULEURS.text2; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, PAD.t+gh); ctx.lineTo(PAD.l+gw, PAD.t+gh); ctx.stroke();
-
-  texte(ctx, 'Solde: 0 à M'+duree, W/2, PAD.t+gh+40, {size:10,align:'center',color:COULEURS.f615});
-
+  axes(ctx,PAD.l,PAD.t,gw,gh);
+  txt(ctx,'Solde = 0 à M'+duree,PAD.l+gw-10,PAD.t+gh+22,{size:9,color:C.vert,align:'right'});
   return canvas.toBuffer('image/png');
 }
 
