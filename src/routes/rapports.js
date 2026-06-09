@@ -2,7 +2,7 @@ const router  = require('express').Router();
 const pool    = require('../db/pool');
 const auth    = require('../middleware/auth');
 const { genererExcel, genererPDF } = require('../utils/rapportGenerateur');
-const { calcCAHT, calcCDHT, COMPO } = require('../utils/formules');
+const formules = require('../utils/formules');
 
 router.get('/', auth, async (req, res) => {
   try {
@@ -61,7 +61,7 @@ router.post('/generer', auth, async (req, res) => {
       const consCum={}, rebCum={};
       valides.forEach(s=>{
         const prods={C12:s.c12,C24:s.c24,F615:s.f615,F605:s.f605,F61:s.f61,HILIO:s.hilio};
-        const conso=require('../utils/formules').calcConsommations(prods);
+        const conso=formules.calcConsommations(prods);
         Object.entries(conso).forEach(([k,v])=>{consCum[k]=(consCum[k]||0)+v;});
         if (s.rebuts) {
           rebCum.PREF_32G=(rebCum.PREF_32G||0)+(s.rebuts.pref32||0);
@@ -149,6 +149,14 @@ router.post('/generer', auth, async (req, res) => {
       );
       donnees.mouvements=mvts;
     }
+
+    // ── Récupérer nom DG ──
+    try {
+      const {rows:dgRows} = await pool.query(
+        `SELECT nom_complet FROM utilisateurs WHERE id=$1`,[req.user.id]
+      );
+      donnees.dg_nom = dgRows[0]?.nom_complet || req.user.nom_complet || 'Boumzina Raïna';
+    } catch { donnees.dg_nom = 'Boumzina Raïna'; }
 
     // ── Générer fichier ──
     let buffer, contentType, fileName;
