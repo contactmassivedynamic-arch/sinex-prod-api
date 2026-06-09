@@ -41,13 +41,15 @@ router.post('/config', auth, role(DG), async (req, res) => {
 router.post('/tester', auth, role(DG), async (req, res) => {
   try {
     const nodemailer = require('nodemailer');
-    const port = parseInt(req.body.smtp_port||587);
+    const port = parseInt(req.body.smtp_port||465);
     const t = nodemailer.createTransport({
       host: req.body.smtp_host||'smtp.gmail.com', port,
       secure: port===465,
       auth: {user:req.body.smtp_user, pass:req.body.smtp_pass},
       tls:{rejectUnauthorized:false},
-      connectionTimeout:15000,
+      connectionTimeout:30000,
+      greetingTimeout:20000,
+      socketTimeout:45000,
     });
     // Envoyer un email de test
     await t.sendMail({
@@ -57,7 +59,7 @@ router.post('/tester', auth, role(DG), async (req, res) => {
       text:'Configuration SMTP opérationnelle ✓',
     });
     res.json({message:'Email de test envoyé ✓ — vérifiez votre boîte mail'});
-  } catch(e) { res.status(400).json({message:'Erreur SMTP: '+e.message}); }
+  } catch(e) { console.error('[SMTP TEST ERROR]',e.message,e.code); res.status(400).json({message:'Erreur SMTP: '+e.message+' (code: '+e.code+')'}); }
 });
 
 // POST envoyer maintenant

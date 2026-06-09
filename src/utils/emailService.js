@@ -4,7 +4,8 @@
 const nodemailer = require('nodemailer');
 
 function creerTransport(config) {
-  const port = parseInt(config.smtp_port || 587);
+  const port = parseInt(config.smtp_port || 465);
+  // Gmail : port 465 SSL ou port 587 STARTTLS
   return nodemailer.createTransport({
     host:   config.smtp_host || 'smtp.gmail.com',
     port:   port,
@@ -13,10 +14,10 @@ function creerTransport(config) {
       user: config.smtp_user,
       pass: config.smtp_pass,
     },
-    tls: { rejectUnauthorized: false, ciphers: 'SSLv3' },
+    tls: { rejectUnauthorized: false },
     connectionTimeout: 30000,
-    greetingTimeout:   15000,
-    socketTimeout:     30000,
+    greetingTimeout:   20000,
+    socketTimeout:     45000,
   });
 }
 
