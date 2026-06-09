@@ -331,6 +331,21 @@ async function xlRebuts(wb, d, mois='') {
 // PDF — design sobre avec logo transparent
 // ═══════════════════════════════════════════════
 
+function drawWatermark(doc) {
+  try {
+    if (!fs.existsSync(LOGO_PATH)) return;
+    const W = doc.page.width;
+    const H = doc.page.height;
+    const logoSize = Math.min(W, H) * 0.55; // 55% de la largeur de la page
+    const x = (W - logoSize) / 2;
+    const y = (H - logoSize) / 2;
+    doc.save();
+    doc.opacity(0.045); // très adouci
+    doc.image(LOGO_PATH, x, y, {width: logoSize, height: logoSize, fit:[logoSize,logoSize], align:'center', valign:'center'});
+    doc.restore();
+  } catch(e) {}
+}
+
 async function genererPDF(type, donnees, mois) {
   return new Promise((resolve,reject) => {
     try {
@@ -340,6 +355,8 @@ async function genererPDF(type, donnees, mois) {
       doc.on('end',()=>resolve(Buffer.concat(bufs)));
       doc.on('error',reject);
 
+      // Filigrane sur la première page
+      drawWatermark(doc);
       pdfEntete(doc, type, mois, donnees.dg_nom);
 
       switch(type) {
@@ -428,6 +445,7 @@ function pdfSection(doc, titre) {
   _sec++;
   if (doc.y > doc.page.height-110) {
     doc.addPage();
+    drawWatermark(doc);
     doc.rect(0,0,doc.page.width,2).fill('#475569');
     doc.moveDown(0.5);
   }
@@ -467,6 +485,7 @@ function pdfTableau(doc, entetes, lignes, widths=null) {
   lignes.forEach((ligne,li)=>{
     if(doc.y>doc.page.height-70){
       doc.addPage();
+      drawWatermark(doc);
       doc.rect(0,0,doc.page.width,2).fill('#475569');
       doc.moveDown(0.5);
       drawEntetes();

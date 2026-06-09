@@ -33,13 +33,24 @@ router.post('/generer', auth, async (req, res) => {
     const moisRap = mois || new Date().toISOString().slice(0, 7);
     let donnees = {};
 
-    // Nom DG
+    // Nom DG — toujours le DG, quel que soit l'utilisateur qui télécharge
     try {
-      const { rows: dg } = await pool.query(
-        `SELECT nom_complet FROM utilisateurs WHERE id=$1`, [req.user.id]
+      // Chercher le DG par email ou par rôle
+      const { rows: dgRows } = await pool.query(
+        `SELECT u.nom_complet FROM utilisateurs u
+         LEFT JOIN roles r ON r.id = u.role_id
+         WHERE u.email = 'dg@sinex-sa.tg'
+            OR r.nom_role = 'directeur_general'
+            OR u.nom_role = 'directeur_general'
+         ORDER BY u.id LIMIT 1`
       );
-      donnees.dg_nom = dg[0]?.nom_complet || 'Boumzina Raïna';
-    } catch { donnees.dg_nom = 'Boumzina Raïna'; }
+      donnees.dg_nom = dgRows[0]?.nom_complet || 'Boumzina Raïna';
+    } catch {
+      try {
+        const { rows: u } = await pool.query(`SELECT nom_complet FROM utilisateurs WHERE id=$1`,[req.user.id]);
+        donnees.dg_nom = u[0]?.nom_complet || 'Boumzina Raïna';
+      } catch { donnees.dg_nom = 'Boumzina Raïna'; }
+    }
 
     // ── PRODUCTION & REBUTS ──────────────────────
     if (['production', 'rebuts'].includes(type_rapport)) {
