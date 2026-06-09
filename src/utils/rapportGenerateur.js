@@ -430,30 +430,22 @@ function pdfSignature(doc, dgNom) {
   doc.fillColor('#475569').fontSize(10).font('Helvetica')
      .text(`Fait à Défalé, le ${new Date().toLocaleDateString('fr-FR')}`, 45, doc.y, {width:W/2});
   const sy = doc.y - 14;
-  doc.fillColor('#0F172A').fontSize(11).font('Helvetica-Bold')
-     .text('Le Directeur Général', 45+W/2, sy, {width:W/2, align:'right'});
-  doc.fillColor('#334155').fontSize(11).font('Helvetica')
-     .text(dgNom||'Boumzina Raïna', 45+W/2, sy+16, {width:W/2, align:'right'});
-  // Signature + cachet
+  // Signature + cachet uniquement (sans texte nom/titre)
   try {
     if (fs.existsSync(SIG_PATH)) {
-      doc.image(SIG_PATH, doc.page.width-205, sy+28, {width:160, height:65, fit:[160,65]});
+      doc.image(SIG_PATH, doc.page.width-375, sy, {width:352, height:143, fit:[352,143]});
     } else {
-      // Cachet textuel de remplacement
-      doc.roundedRect(doc.page.width-205, sy+28, 160, 65, 5)
+      doc.roundedRect(doc.page.width-375, sy, 352, 143, 5)
          .lineWidth(1.5).stroke('#0F172A');
-      doc.fillColor('#0F172A').fontSize(7.5).font('Helvetica-Bold')
-         .text('SINEX SA — CACHET OFFICIEL', doc.page.width-203, sy+36, {width:156, align:'center'});
-      doc.moveTo(doc.page.width-203, sy+47).lineTo(doc.page.width-49, sy+47).lineWidth(0.5).stroke('#CBD5E1');
-      doc.fillColor('#334155').fontSize(8.5).font('Helvetica-Bold')
-         .text(dgNom||'Boumzina Raïna', doc.page.width-203, sy+51, {width:156, align:'center'});
-      doc.fillColor('#0891B2').fontSize(7.5).font('Helvetica')
-         .text('Directeur Général', doc.page.width-203, sy+63, {width:156, align:'center'});
-      doc.fillColor('#64748B').fontSize(7).font('Helvetica')
-         .text('Défalé, Togo — '+new Date().toLocaleDateString('fr-FR'), doc.page.width-203, sy+76, {width:156, align:'center'});
+      doc.fillColor('#0F172A').fontSize(8).font('Helvetica-Bold')
+         .text('SINEX SA — CACHET OFFICIEL', doc.page.width-373, sy+50, {width:348, align:'center'});
+      doc.fillColor('#334155').fontSize(9).font('Helvetica-Bold')
+         .text(dgNom||'Boumzina Raïna', doc.page.width-373, sy+65, {width:348, align:'center'});
+      doc.fillColor('#0891B2').fontSize(8).font('Helvetica')
+         .text('Directeur Général', doc.page.width-373, sy+80, {width:348, align:'center'});
     }
   } catch(e) { console.error('Signature error:', e.message); }
-  doc.moveDown(2.5);
+  doc.moveDown(4);
 
   // Pied de page
   const py = doc.page.height-22;
