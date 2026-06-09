@@ -49,17 +49,12 @@ async function envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport, mo
     from: 'SINEX SA Dashboard <onboarding@resend.dev>',
     to: destinataires,
     subject: sujet,
-    text: corps.replace(/\\n/g,'\n'),
-    html: `<div style="font-family:Arial,sans-serif;max-width:600px">`+
-          `<div style="background:#0F172A;padding:16px;border-radius:8px 8px 0 0">`+
-          `<h2 style="color:#22D3EE;margin:0">SINEX SA — Tableau de bord</h2>`+
-          `<p style="color:#94A3B8;margin:4px 0 0">Défalé, Togo</p></div>`+
-          `<div style="padding:20px;background:#F8FAFC;border:1px solid #E2E8F0">`+
-          `<p>${corps.replace(/\\n/g,'<br>').replace(/
-/g,'<br>')}</p>`+
-          `<hr style="border-color:#E2E8F0">`+
-          `<p style="color:#64748B;font-size:12px">Rapport généré automatiquement — SINEX SA Dashboard</p>`+
-          `</div></div>`,
+    text: corps,
+    html: '<div style="font-family:Arial,sans-serif">' +
+          '<h2 style="color:#0891B2">SINEX SA</h2>' +
+          '<p>' + corps.split('\n').join('<br>') + '</p>' +
+          '<hr><p style="color:#64748B;font-size:11px">Rapport automatique — SINEX SA</p>' +
+          '</div>',
     attachments,
   });
 
