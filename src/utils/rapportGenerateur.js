@@ -61,6 +61,7 @@ async function genererExcel(type, donnees, mois) {
     case 'stocks':     return xlStocks(wb,donnees,mois);
     case 'tresorerie': return xlTresorerie(wb,donnees,mois);
     case 'rebuts':     return xlRebuts(wb,donnees,mois);
+    case 'tendances':  return xlTendances(wb,donnees,mois);
     default:           return xlProduction(wb,donnees,mois);
   }
 }
@@ -372,7 +373,8 @@ async function genererPDF(type, donnees, mois) {
         case 'stocks':     pdfStocks(doc,donnees); break;
         case 'tresorerie': pdfTresorerie(doc,donnees); break;
         case 'rebuts':     pdfRebuts(doc,donnees); break;
-        default:           pdfProduction(doc,donnees);
+        case 'tendances':  pdfTendances(doc,donnees); break;
+    default:           pdfProduction(doc,donnees);
       }
 
       pdfSignature(doc, donnees.dg_nom);
@@ -742,6 +744,263 @@ function pdfRebuts(doc, d) {
     doc.fillColor('#1E293B').fontSize(11).font('Helvetica-Bold')
        .text(`Total valeur des rebuts : ${fmt(totVal)} FCFA`, 45, doc.y, {align:'right',width:doc.page.width-90});
   }
+}
+
+
+// ═══════════════════════════════════════════════
+// TENDANCES — Analyse financière avancée
+// ═══════════════════════════════════════════════
+
+function pdfTendances(doc, d) {
+  resetSec();
+  const hist         = d.historique || [];
+  const credits_total= d.credits_total || 0;
+  const ci_total     = d.ci_total || 0;
+  const nbMois       = hist.length || 1;
+  const caTotal      = hist.reduce((s,m)=>s+parseFloat(m.ca_ht||0),0);
+  const cdTotal      = hist.reduce((s,m)=>s+parseFloat(m.cd_ht||0),0);
+  const mbTotal      = hist.reduce((s,m)=>s+parseFloat(m.mb_ht||0),0);
+  const caMoyen      = caTotal / nbMois;
+  const mbMoyen      = mbTotal / nbMois;
+  const tmbMoyen     = caTotal > 0 ? mbTotal/caTotal : 0;
+
+  // Capacités de l'usine
+  const HEURES_SHIFT    = 8;    // heures par shift
+  const SHIFTS_JOUR     = 2;    // shifts par jour
+  const JOURS_OUVRABLES = 26;   // jours/mois
+  const HEURES_MOIS     = HEURES_SHIFT * SHIFTS_JOUR * JOURS_OUVRABLES; // 416h
+
+  // Rendements théoriques par format (cartons/heure)
+  const REND_THEO = {C12:15, C24:18, F615:20, F605:22, F61:20, HILIO:25};
+
+  // Capacité max théorique mensuelle (cartons)
+  const CAP_MAX = {};
+  Object.entries(REND_THEO).forEach(([code,rh])=>{CAP_MAX[code]=rh*HEURES_MOIS;});
+
+  // Volumes réels moyens depuis historique
+  const volMoyens = d.vol_moyens || {C12:0,C24:0,F615:0,F605:0,F61:0,HILIO:0};
+
+  // ── I. POTENTIEL HORAIRE DE L'USINE ──
+  pdfSection(doc, "Potentiel horaire et capacite de l'usine");
+  pdfTableau(doc,
+    ['Parametre','Valeur','Detail'],
+    [
+      ["Heures productives / shift",        HEURES_SHIFT+" h",      "Temps de production net"],
+      ["Shifts / jour",                     SHIFTS_JOUR+" shifts",  "Configuration actuelle"],
+      ["Jours ouvres / mois",               JOURS_OUVRABLES+" j",   "Base de calcul mensuelle"],
+      ["Heures productives totales / mois", HEURES_MOIS+" h",       "Capacite nominale usine"],
+      ["Jours reellement travailles / mois",fmt(d.jours_moyens||0), "Moyenne observee"],
+      ["Taux utilisation usine",            d.jours_moyens>0?((d.jours_moyens/JOURS_OUVRABLES)*100).toFixed(1)+" %":"--", d.jours_moyens>0&&(d.jours_moyens/JOURS_OUVRABLES)>=0.85?"Bon niveau":"Marge d'optimisation possible"],
+    ],
+    [155,90,200]
+  );
+
+  // ── II. RENDEMENT PAR FORMAT ──
+  pdfSection(doc, "Rendement par format de production");
+  pdfTableau(doc,
+    ['Format','Rend. theo. (ctn/h)','Vol. moyen/mois','Cap. max/mois','Taux utilisation','Ecart potentiel'],
+    Object.entries(REND_THEO).map(([code,rth])=>{
+      const volReel = volMoyens[code]||0;
+      const capMax  = CAP_MAX[code];
+      const txUtil  = capMax > 0 ? volReel/capMax : 0;
+      const ecart   = capMax - volReel;
+      return [
+        code,
+        rth+" ctn/h",
+        fmt(volReel)+" ctn",
+        fmt(capMax)+" ctn",
+        {text:fmtP(txUtil), color:txUtil>=0.75?'#166534':txUtil>=0.50?'#92400E':'#991B1B', bold:txUtil>=0.75},
+        {text:"+"+fmt(ecart)+" ctn possibles", color:'#0D72B0'},
+      ];
+    }),
+    [55,80,75,75,75,80]
+  );
+  pdfLigneTotale(doc,[
+    "TOTAL","",
+    fmt(Object.values(volMoyens).reduce((s,v)=>s+v,0))+" ctn",
+    fmt(Object.values(CAP_MAX).reduce((s,v)=>s+v,0))+" ctn",
+    fmtP(Object.values(volMoyens).reduce((s,v)=>s+v,0)/Object.values(CAP_MAX).reduce((s,v)=>s+v,0)||0),
+    "",
+  ],[55,80,75,75,75,80]);
+
+  // ── III. IMPACT CA D'UNE MEILLEURE UTILISATION ──
+  pdfSection(doc, "Impact CA d'une meilleure utilisation des capacites");
+
+  const caActuel = caMoyen;
+  const scenarios = [
+    ["Utilisation a 70%", 0.70],
+    ["Utilisation a 80%", 0.80],
+    ["Utilisation a 90%", 0.90],
+    ["Utilisation a 100% (max)", 1.00],
+  ];
+
+  pdfTableau(doc,
+    ['Scenario','Vol. total (ctn)','CA HT estime (FCFA)','Gain vs actuel (FCFA)','MB estimee (FCFA)'],
+    scenarios.map(([label, tx])=>{
+      const volSim = Object.entries(REND_THEO).reduce((s,[code,rh])=>s+rh*HEURES_MOIS*tx,0);
+      // Repartition proportionnelle par format
+      const caSim = Object.entries(REND_THEO).reduce((s,[code,rh])=>{
+        const q = rh*HEURES_MOIS*tx/Object.values(REND_THEO).length;
+        return s + q*(PRIX_PF[code]||0);
+      },0);
+      const mbSim = caSim * tmbMoyen;
+      return [
+        label,
+        fmt(Math.round(volSim))+" ctn",
+        fmt(Math.round(caSim)),
+        {text:"+"+fmt(Math.round(caSim-caActuel)), color:'#166534'},
+        fmt(Math.round(mbSim)),
+      ];
+    }),
+    [115,75,95,95,80]
+  );
+
+  // ── IV. DISPONIBILITE MATIERES PREMIERES ──
+  pdfSection(doc, "Disponibilite des matieres premieres critiques");
+
+  const stocks_mp = d.stocks_mp || [];
+  if (stocks_mp.length > 0) {
+    pdfTableau(doc,
+      ['Matiere premiere','Stock actuel','Besoin mensuel','Couverture','Statut','Fournisseur'],
+      stocks_mp.map(mp=>{
+        const couv = mp.besoin_mensuel > 0 ? mp.stock/mp.besoin_mensuel : 0;
+        return [
+          mp.libelle,
+          fmt(mp.stock)+" "+mp.unite,
+          fmt(mp.besoin_mensuel)+" "+mp.unite,
+          couv.toFixed(1)+" mois",
+          {text: couv>=2?"OK": couv>=1?"Surveiller":"CRITIQUE",
+           color: couv>=2?"#166534":couv>=1?"#92400E":"#991B1B", bold:couv<1},
+          mp.fournisseur||"--",
+        ];
+      }),
+      [100,65,65,55,65,90]
+    );
+  } else {
+    doc.fillColor('#64748B').fontSize(9.5).font('Helvetica-Oblique')
+       .text("Saisissez les stocks dans la page Stocks pour activer cette analyse.", 49, doc.y, {width:doc.page.width-94});
+    doc.moveDown(0.5);
+  }
+
+  // ── V. OPTIMISATION TEMPS DE TRAVAIL ──
+  pdfSection(doc, "Optimisation du temps de travail");
+  pdfTableau(doc,
+    ['Action','Impact attendu','Priorite','Delai mise en oeuvre'],
+    [
+      ["Reduire les arrets non planifies (pannes)",           "+5 a +8% capacite",    "Haute",   "1 a 3 mois"],
+      ["Optimiser les changements de format",                 "+3 a +5% capacite",    "Moyenne", "1 mois"],
+      ["Ajouter un 3eme shift (si demande suffisante)",       "+50% capacite",        "Haute",   "3 a 6 mois"],
+      ["Reduire les arrets pour rupture MP",                  "+2 a +4% capacite",    "Haute",   "Immediat"],
+      ["Standardiser les procedures de nettoyage",            "+1 a +2% capacite",    "Basse",   "1 mois"],
+      ["Maintenance preventive reguliere",                    "+3 a +5% disponibilite","Haute",  "Continu"],
+    ],
+    [155,90,55,120]
+  );
+
+  // ── VI. CAPACITE DE REMBOURSEMENT ──
+  pdfSection(doc, "Capacite de remboursement de la dette");
+
+  const excedentBrut  = mbMoyen - (ci_total/nbMois||0);
+  const reserveExploit= excedentBrut * 0.30;
+  const capaciteRemb  = Math.max(0, excedentBrut - reserveExploit);
+  const coefRemb      = credits_total > 0 ? capaciteRemb/credits_total : 0;
+  const dureeRemb     = capaciteRemb > 0 ? Math.ceil(credits_total/capaciteRemb) : 0;
+
+  pdfTableau(doc,
+    ['Indicateur','Valeur (FCFA)','Base de calcul'],
+    [
+      ["MB mensuelle moyenne",         fmt(mbMoyen),          "Moyenne des mois analyses"],
+      ["Charges indirectes mensuelles",fmt(ci_total/nbMois||0),"CI saisies ATP"],
+      ["Excedent Brut Exploitation",   fmt(excedentBrut),     "MB - Charges indirectes"],
+      ["Reserve exploitation (30%)",   fmt(reserveExploit),   "Securite operationnelle"],
+      [{text:"Capacite de remboursement",bold:true},{text:fmt(capaciteRemb),bold:true},"EBE - Reserve"],
+    ],
+    [170,110,160]
+  );
+
+  if (credits_total > 0) {
+    doc.moveDown(0.5);
+    pdfSection(doc, "Coefficient et plan de remboursement");
+    pdfTableau(doc,
+      ['Parametre','Valeur','Interpretation'],
+      [
+        ["Total des dettes",             fmt(credits_total)+" FCFA", "Credits actifs SINEX SA"],
+        ["Capacite mensuelle",           fmt(capaciteRemb)+" FCFA",  "Disponible chaque mois"],
+        [{text:"Coefficient remboursement",bold:true},{text:coefRemb.toFixed(4),bold:true,color:coefRemb>=0.05?'#166534':'#92400E'},coefRemb>=0.10?"Solide (>=10%/mois)":coefRemb>=0.05?"Acceptable (5-10%/mois)":"Faible (<5%/mois)"],
+        [{text:"Duree remboursement",bold:true},{text:dureeRemb>0?dureeRemb+" mois":"N/A",bold:true},dureeRemb>0?"Soit "+Math.ceil(dureeRemb/12)+" an(s) et "+(dureeRemb%12)+" mois":"Capacite insuffisante"],
+        ["Frequence recommandee",        capaciteRemb>0?"Mensuelle":"Trimestrielle", capaciteRemb>=credits_total*0.10?"Remboursement accelere possible":"Remboursement standard"],
+      ],
+      [160,110,170]
+    );
+
+    // Plan 12 mois
+    if (dureeRemb > 0) {
+      pdfSection(doc, "Plan de remboursement previsionnel (12 mois)");
+      const lignes = [];
+      let restant = credits_total;
+      const now = new Date();
+      for (let i=1; i<=Math.min(dureeRemb,12); i++) {
+        const d2 = new Date(now.getFullYear(), now.getMonth()+i, 1);
+        const label = "Mois "+i+" - "+d2.toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
+        const remb  = Math.min(capaciteRemb, restant);
+        restant    -= remb;
+        lignes.push([label, fmt(capaciteRemb)+" F", fmt(remb)+" F", fmt(Math.max(0,restant))+" F",
+          restant<=0?{text:"Solde",bold:true,color:'#166534'}:"En cours"]);
+        if (restant<=0) break;
+      }
+      pdfTableau(doc, ['Periode','Capacite dispo.','Remboursement','Capital restant','Statut'], lignes, [110,75,75,85,70]);
+    }
+  }
+}
+
+async function xlTendances(wb, d, mois) {
+  const ws = wb.addWorksheet('Tendances');
+  ws.columns = [{key:'a',width:40},{key:'b',width:20},{key:'c',width:20},{key:'d',width:20}];
+  xlHeader(ws,'ANALYSE DES TENDANCES ET OPTIMISATION',4);
+  let sec=1;
+
+  const hist=d.historique||[], credits_total=d.credits_total||0, ci_total=d.ci_total||0;
+  const nbMois=hist.length||1;
+  const caTotal=hist.reduce((s,m)=>s+parseFloat(m.ca_ht||0),0);
+  const cdTotal=hist.reduce((s,m)=>s+parseFloat(m.cd_ht||0),0);
+  const mbTotal=hist.reduce((s,m)=>s+parseFloat(m.mb_ht||0),0);
+  const caMoyen=caTotal/nbMois, cdMoyen=cdTotal/nbMois;
+  const tmbMoyen=caTotal>0?mbTotal/caTotal:0;
+  const excedent=mbTotal/nbMois-(ci_total/nbMois||0);
+  const capaciteRemb=Math.max(0,excedent*0.70);
+  const coefRemb=credits_total>0?capaciteRemb/credits_total:0;
+  const dureeRemb=capaciteRemb>0?Math.ceil(credits_total/capaciteRemb):0;
+
+  xlSection(ws,sec++,"Leviers d'augmentation du CA",4);
+  xlEntete(ws,['Produit','Marge unitaire (FCFA)','Taux de marge','Recommandation']);
+  Object.entries({C12:PRIX_PF.C12-CD_UNIT.C12,C24:PRIX_PF.C24-CD_UNIT.C24,F615:PRIX_PF.F615-CD_UNIT.F615,F605:PRIX_PF.F605-CD_UNIT.F605,F61:PRIX_PF.F61-CD_UNIT.F61,HILIO:PRIX_PF.HILIO-CD_UNIT.HILIO})
+    .sort((a,b)=>b[1]-a[1]).forEach(([code,marge])=>{
+      const tx=marge/PRIX_PF[code];
+      xlLigne(ws,[code,fmt(marge),fmtP(tx),tx>=0.40?'⭐ Prioritaire':tx>=0.25?'✓ Favorable':'⚠ Optimiser']);
+    });
+
+  xlSection(ws,sec++,"Simulation augmentation CA",4);
+  xlEntete(ws,['Scénario','CA simulé (FCFA)','MB simulée (FCFA)','TMB estimé']);
+  [['Base',1,1],['+10% volume',1.1,1.05],['+20% volume',1.2,1.10],['+30% volume',1.3,1.15],['+10% prix',1.1,1.0]].forEach(([s,cv,cc])=>{
+    xlLigne(ws,[s,fmt(caMoyen*cv),fmt(caMoyen*cv-cdMoyen*cc),fmtP((caMoyen*cv-cdMoyen*cc)/(caMoyen*cv))]);
+  });
+
+  xlSection(ws,sec++,"Capacite de remboursement",4);
+  xlEntete(ws,['Indicateur','Valeur (FCFA)','','']);
+  xlLigne(ws,['MB mensuelle moyenne',fmt(mbTotal/nbMois),'','']);
+  xlLigne(ws,['Charges indirectes mensuelles',fmt(ci_total/nbMois||0),'','']);
+  xlLigne(ws,['Excedent Brut Exploitation',fmt(excedent),'',''],{bold:true});
+  xlLigne(ws,['Capacite remboursement mensuelle',fmt(capaciteRemb),'',''],{bold:true,bg:'#0F172A',color:'#F8FAFC'});
+
+  xlSection(ws,sec++,"Coefficient de remboursement",4);
+  xlEntete(ws,['Paramètre','Valeur','Interprétation','']);
+  xlLigne(ws,['Total des dettes',fmt(credits_total)+' FCFA','','']);
+  xlLigne(ws,['Coefficient de remboursement',coefRemb.toFixed(4),coefRemb>=0.10?'Solide':coefRemb>=0.05?'Acceptable':'Faible',''],{bold:true});
+  xlLigne(ws,['Durée de remboursement',dureeRemb>0?dureeRemb+' mois':'N/A',dureeRemb>0?Math.ceil(dureeRemb/12)+' an(s)':'','']);
+  xlLigne(ws,['Fréquence recommandée',capaciteRemb>0?'Mensuelle':'Trimestrielle','','']);
+
+  xlSignature(ws,d.dg_nom,4);
+  return wb.xlsx.writeBuffer();
 }
 
 module.exports = { genererExcel, genererPDF };
