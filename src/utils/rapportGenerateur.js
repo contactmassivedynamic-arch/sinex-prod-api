@@ -6,6 +6,8 @@ const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const path = require('path');
 const fs   = require('fs');
+let charts = null;
+try { charts = require('./chartGenerator'); } catch(e) { console.warn('[CHARTS] chartGenerator non disponible'); }
 
 const LOGO_PATH = path.join(__dirname, 'logo_sinex.png');
 const SIG_PATH  = path.join(__dirname, 'signature_dg.png');
@@ -339,6 +341,191 @@ async function xlRebuts(wb, d, mois='') {
 // PDF — design sobre avec logo transparent
 // ═══════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════
+// FONCTIONS GRAPHIQUES PDF
+// ═══════════════════════════════════════════════
+
+// Graphique barres verticales
+function pdfBarChart(doc, titre, labels, values, options={}) {
+  const { color='#0891B2', maxVal=null, unite='', width=doc.page.width-90, height=90 } = options;
+  if (!values.length) return;
+  if (doc.y > doc.page.height-height-40) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+
+  doc.fillColor('#1E293B').fontSize(8).font('Helvetica-Bold').text(titre, 45, doc.y);
+  doc.moveDown(0.3);
+
+  const x0=45, y0=doc.y, barW=Math.min(30, (width-40)/labels.length-4);
+  const maxV = maxVal || Math.max(...values, 1);
+  const scaleH = (height-20) / maxV;
+
+  // Fond
+  doc.rect(x0, y0, width, height).fill('#0F172A').stroke();
+
+  // Lignes de référence
+  [0.25,0.5,0.75,1].forEach(p => {
+    const yL = y0+height-20-(height-20)*p;
+    doc.moveTo(x0+30,yL).lineTo(x0+width-5,yL).lineWidth(0.3).stroke('#1E3A5F');
+    doc.fillColor('#475569').fontSize(6).font('Helvetica')
+       .text(fmt(maxV*p)+unite, x0+2, yL-3, {width:26, align:'right'});
+  });
+
+  // Barres
+  const totalW = labels.length*(barW+4);
+  const startX = x0+30+(width-30-totalW)/2;
+  labels.forEach((lbl,i) => {
+    const val = values[i]||0;
+    const bH  = Math.max(1, val*scaleH);
+    const bX  = startX + i*(barW+4);
+    const bY  = y0+height-20-bH;
+
+    // Barre avec dégradé
+    const alpha = 0.5+0.5*(val/maxV);
+    doc.rect(bX, bY, barW, bH).fill(color);
+    doc.rect(bX, bY, barW*0.4, bH).fill('#FFFFFF20');
+
+    // Valeur au dessus
+    if (val > 0) {
+      doc.fillColor('#F8FAFC').fontSize(5.5).font('Helvetica-Bold')
+         .text(val>=1000?Math.round(val/1000)+'k':String(Math.round(val)), bX-2, bY-8, {width:barW+4, align:'center'});
+    }
+    // Label dessous
+    doc.fillColor('#94A3B8').fontSize(5.5).font('Helvetica')
+       .text(lbl, bX-2, y0+height-18, {width:barW+4, align:'center'});
+  });
+  doc.y = y0+height+6;
+  doc.moveDown(0.5);
+}
+
+// Graphique courbe
+function pdfLineChart(doc, titre, labels, series, options={}) {
+  const { width=doc.page.width-90, height=80 } = options;
+  if (doc.y > doc.page.height-height-40) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+  doc.fillColor('#1E293B').fontSize(8).font('Helvetica-Bold').text(titre, 45, doc.y);
+  doc.moveDown(0.3);
+
+  const x0=45, y0=doc.y;
+  const colors=['#22D3EE','#34D399','#F59E0B','#F87171'];
+  const allVals = series.flatMap(s=>s.values);
+  const maxV = Math.max(...allVals, 1);
+  const scaleH=(height-20)/maxV;
+  const stepW=(width-40)/(labels.length-1||1);
+
+  doc.rect(x0,y0,width,height).fill('#0F172A').stroke();
+
+  // Grille
+  [0.25,0.5,0.75,1].forEach(p=>{
+    const yL=y0+height-20-(height-20)*p;
+    doc.moveTo(x0+35,yL).lineTo(x0+width-5,yL).lineWidth(0.3).stroke('#1E3A5F');
+    doc.fillColor('#475569').fontSize(6).font('Helvetica')
+       .text(Math.round(maxV*p/1000)+'k', x0+2, yL-3, {width:30, align:'right'});
+  });
+
+  // Labels X
+  labels.forEach((lbl,i)=>{
+    const xP=x0+35+i*stepW;
+    doc.fillColor('#94A3B8').fontSize(5.5).font('Helvetica')
+       .text(lbl, xP-15, y0+height-14, {width:30, align:'center'});
+  });
+
+  // Courbes
+  series.forEach((s,si)=>{
+    const col=colors[si%colors.length];
+    const pts=s.values.map((v,i)=>({x:x0+35+i*stepW, y:y0+height-20-v*scaleH}));
+    if (pts.length<2) return;
+    doc.moveTo(pts[0].x,pts[0].y);
+    pts.slice(1).forEach(p=>doc.lineTo(p.x,p.y));
+    doc.lineWidth(1.5).stroke(col);
+    pts.forEach(p=>doc.circle(p.x,p.y,2).fill(col));
+  });
+
+  // Légende
+  if (series.length>1) {
+    series.forEach((s,si)=>{
+      doc.rect(x0+40+si*70, y0+height+2, 8, 5).fill(colors[si%colors.length]);
+      doc.fillColor('#CBD5E1').fontSize(6).font('Helvetica')
+         .text(s.label, x0+50+si*70, y0+height+2, {width:60});
+    });
+  }
+  doc.y = y0+height+14;
+  doc.moveDown(0.5);
+}
+
+// Camembert (donut)
+function pdfDonut(doc, titre, labels, values, options={}) {
+  const { size=70 } = options;
+  if (!values.length||values.every(v=>v===0)) return;
+  if (doc.y > doc.page.height-size*2-40) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+
+  const colors=['#0891B2','#34D399','#F59E0B','#F87171','#A78BFA','#FB923C'];
+  const cx=45+size, cy=doc.y+size;
+  const total=values.reduce((s,v)=>s+v,0)||1;
+  let angle=-Math.PI/2;
+
+  doc.fillColor('#1E293B').fontSize(8).font('Helvetica-Bold')
+     .text(titre, 45, doc.y);
+  doc.moveDown(0.3);
+  const yStart=doc.y;
+
+  // Secteurs
+  values.forEach((v,i)=>{
+    const sweep=(v/total)*Math.PI*2;
+    const c=colors[i%colors.length];
+    const x1=cx+size*Math.cos(angle), y1=cy+size*Math.sin(angle);
+    const x2=cx+size*Math.cos(angle+sweep), y2=cy+size*Math.sin(angle+sweep);
+    const lg=sweep>Math.PI?1:0;
+    doc.path(`M ${cx} ${cy} L ${x1} ${y1} A ${size} ${size} 0 ${lg} 1 ${x2} ${y2} Z`).fill(c);
+    angle+=sweep;
+  });
+  // Trou central
+  doc.circle(cx,cy,size*0.55).fill('#0F172A');
+
+  // Légende droite
+  const lx=cx+size+15, ly=yStart;
+  values.forEach((v,i)=>{
+    const pct=((v/total)*100).toFixed(1);
+    doc.rect(lx,ly+i*14,8,8).fill(colors[i%colors.length]);
+    doc.fillColor('#CBD5E1').fontSize(7).font('Helvetica')
+       .text(labels[i]+' — '+pct+'%', lx+11, ly+i*14+1, {width:120});
+  });
+
+  doc.y = Math.max(doc.y, yStart+values.length*14)+10;
+  doc.moveDown(0.5);
+}
+
+// Jauge simple (progress bar)
+function pdfJauge(doc, label, valeur, maxi, options={}) {
+  const { color='#0891B2', width=doc.page.width-90 } = options;
+  if (doc.y > doc.page.height-30) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+  const pct = Math.min(1, (valeur||0)/(maxi||1));
+  const y=doc.y;
+  doc.fillColor('#CBD5E1').fontSize(7.5).font('Helvetica-Bold')
+     .text(label, 45, y, {width:120, continued:false});
+  doc.rect(175,y+1,width-135,8).fill('#1E293B');
+  const barCol = pct>=0.75?'#34D399':pct>=0.50?'#F59E0B':'#F87171';
+  if (pct>0) doc.rect(175,y+1,(width-135)*pct,8).fill(barCol);
+  doc.fillColor('#F8FAFC').fontSize(7).font('Helvetica-Bold')
+     .text(fmtP(pct)+' ('+fmt(valeur)+' / '+fmt(maxi)+')', 178+(width-135)*pct+2, y+1, {width:100});
+  doc.moveDown(1.0);
+}
+
+function pdfGraphique(doc, imgBuffer, titre, h=200) {
+  if (!imgBuffer) return;
+  try {
+    if (doc.y + h + 30 > doc.page.height - 80) {
+      doc.addPage(); drawWatermark(doc); doc.moveDown(0.5);
+    }
+    if (titre) {
+      doc.fillColor('#64748B').fontSize(8.5).font('Helvetica-Bold')
+         .text(titre.toUpperCase(), 45, doc.y, {width:doc.page.width-90});
+      doc.moveDown(0.3);
+    }
+    const W = doc.page.width - 90;
+    doc.image(imgBuffer, 45, doc.y, {width:W, height:h});
+    doc.y += h + 12;
+    doc.moveDown(0.3);
+  } catch(e) { console.error('[CHART INSERT]', e.message); }
+}
+
 function drawWatermark(doc) {
   try {
     if (!fs.existsSync(LOGO_PATH)) return;
@@ -575,6 +762,19 @@ function pdfProduction(doc, d) {
     fmt(totJours),'',
   ],[55,38,38,42,42,38,38,28,55]);
 
+  // Graphique barres production journalière
+  const joursLabels = saisies.map(s=>strDate(s.date_production).slice(5));
+  const joursC12    = saisies.map(s=>s.c12||0);
+  const joursC24    = saisies.map(s=>s.c24||0);
+  if (joursLabels.length>0) {
+    pdfBarChart(doc,'Production C12 journalière (cartons)',joursLabels,joursC12,{color:'#0891B2',unite:' ctn'});
+    pdfBarChart(doc,'Production C24 journalière (cartons)',joursLabels,joursC24,{color:'#34D399',unite:' ctn'});
+  }
+
+  // Graphique barres production
+  if (charts) {
+    try { pdfGraphique(doc, charts.graphiqueBarresProduction(d.totaux||{}), 'Graphique — Production par format', 200); } catch(e) {}
+  }
   pdfSection(doc,'Totaux des productions validées');
   const t=d.totaux||{};
   let caTotal=0,cdTotal=0,qtyTotal=0;
@@ -590,6 +790,16 @@ function pdfProduction(doc, d) {
     'TOTAL GÉNÉRAL',fmt(qtyTotal),fmt(caTotal),fmt(cdTotal),
     fmt(caTotal-cdTotal),caTotal>0?fmtP((caTotal-cdTotal)/caTotal):'—',
   ],[55,45,95,95,95,55]);
+
+  // Donut mix produits CA
+  const donutCodes=['c12','c24','f615','f605','f61','hilio'];
+  const donutLabels=['C12','C24','F6/1,5L','F6/0,5L','F6/1L','HILIO'];
+  const donutVals=donutCodes.map(k=>(t[k]||0)*(PRIX_PF[k.toUpperCase()]||0));
+  if (donutVals.some(v=>v>0)) {
+    pdfDonut(doc,'Répartition du CA HT par format',
+      donutLabels.filter((_,i)=>donutVals[i]>0),
+      donutVals.filter(v=>v>0));
+  }
 
   pdfSection(doc,'Consommation réelle des intrants');
   const cc=d.consommations_cumulees||{},rc=d.rebuts_cumules||{};
@@ -637,6 +847,22 @@ function pdfATP(doc, d) {
   );
   pdfLigneTotale(doc,['TOTAL',fmt(qtyRealTotal),fmt(cahtrCalc),cahtpCalc>0?((cahtrCalc/cahtpCalc)*100).toFixed(1)+' %':'—'],[70,90,140,140]);
 
+  // Jauges avancement par format
+  pdfSection(doc,'Avancement par format');
+  ['C24','C12','F615','F605','F61','HILIO'].forEach(code=>{
+    const obj=real[code]||0, ob2=d.objectifs&&d.objectifs[code]||obj*1.2||1;
+    if(obj>0||ob2>0) pdfJauge(doc,code,obj,Math.max(ob2,obj));
+  });
+
+  // Graphique avancement ATP
+  if (charts) {
+    try { pdfGraphique(doc, charts.graphiqueAvancementATP(d.objectifs||{}, d.realisations||{}), 'Graphique — Objectifs vs Réalisations ATP', 180); } catch(e) {}
+  }
+  // Graphique camembert MB
+  const mbhtp2 = cahtp - cdhtp;
+  if (charts && mbhtp2 > 0) {
+    try { pdfGraphique(doc, charts.graphiqueCamembertMB(mbhtp2*(15/35), mbhtp2*(10/35), mbhtp2*(10/35)), 'Graphique — Répartition MBHTP', 200); } catch(e) {}
+  }
   pdfSection(doc,'Marges brutes — Projection');
   pdfTableau(doc,['#','Libellé','Prévisionnel (FCFA)',''],
     [['1','CAHTP',fmt(cahtp),''],
@@ -710,6 +936,10 @@ function pdfTresorerie(doc, d) {
     [160,70,135,75]
   );
 
+  // Graphique flux trésorerie
+  if (charts && d.mouvements && d.mouvements.length > 0) {
+    try { pdfGraphique(doc, charts.graphiqueFluxTresorerie(d.mouvements), 'Graphique — Flux de trésorerie par compte', 200); } catch(e) {}
+  }
   const totalEntrees=(d.mouvements||[]).filter(m=>m.sens==='credit').reduce((a,m)=>a+parseFloat(m.montant_fcfa||0),0);
   const totalSorties=(d.mouvements||[]).filter(m=>m.sens==='debit').reduce((a,m)=>a+parseFloat(m.montant_fcfa||0),0);
   pdfSection(doc,'Brouillard de caisse');
@@ -724,6 +954,23 @@ function pdfTresorerie(doc, d) {
     [58,82,98,68,68,66]
   );
   pdfLigneTotale(doc,[`TOTAL — ${(d.mouvements||[]).length} mouvement(s)`,'','',fmt(totalEntrees),fmt(totalSorties),''],[58,82,98,68,68,66]);
+
+  // Donut Entrées vs Sorties
+  if (totalEntrees>0||totalSorties>0) {
+    pdfDonut(doc,'Répartition Entrées / Sorties',
+      ['Entrées','Sorties'],
+      [totalEntrees,totalSorties]
+    );
+  }
+
+  // Barres soldes par compte
+  if ((d.comptes||[]).length>0) {
+    pdfBarChart(doc,'Soldes par compte de trésorerie (FCFA)',
+      d.comptes.map(c=>c.libelle?.slice(0,10)||c.code),
+      d.comptes.map(c=>Math.abs(parseFloat(c.solde_fcfa||0))),
+      {color:'#34D399'}
+    );
+  }
 }
 
 function pdfRebuts(doc, d) {
@@ -781,6 +1028,14 @@ function pdfTendances(doc, d) {
   const volMoyens = d.vol_moyens || {C12:0,C24:0,F615:0,F605:0,F61:0,HILIO:0};
 
   // ── I. POTENTIEL HORAIRE DE L'USINE ──
+  // Graphique jauge utilisation usine
+  if (charts && d.jours_moyens > 0) {
+    try { pdfGraphique(doc, charts.graphiqueJaugeUsine(d.jours_moyens/26), 'Graphique — Taux utilisation usine', 180); } catch(e) {}
+  }
+  // Graphique évolution CA
+  if (charts && hist.length >= 2) {
+    try { pdfGraphique(doc, charts.graphiqueCourbeCA(hist), 'Graphique — Évolution CA HT et MB HT', 220); } catch(e) {}
+  }
   pdfSection(doc, "Potentiel horaire et capacite de l'usine");
   pdfTableau(doc,
     ['Parametre','Valeur','Detail'],
@@ -822,6 +1077,13 @@ function pdfTendances(doc, d) {
     fmtP(Object.values(volMoyens).reduce((s,v)=>s+v,0)/Object.values(CAP_MAX).reduce((s,v)=>s+v,0)||0),
     "",
   ],[55,80,75,75,75,80]);
+
+  // Jauges taux utilisation par format
+  pdfSection(doc,'Taux utilisation par format');
+  Object.entries(REND_THEO).forEach(([code,rth])=>{
+    const vol=volMoyens[code]||0, cap=CAP_MAX[code]||1;
+    pdfJauge(doc,code,vol,cap,{color:'#0891B2'});
+  });
 
   // ── III. IMPACT CA D'UNE MEILLEURE UTILISATION ──
   pdfSection(doc, "Impact CA d'une meilleure utilisation des capacites");
@@ -882,6 +1144,13 @@ function pdfTendances(doc, d) {
     doc.moveDown(0.5);
   }
 
+  // Barres couverture stocks MP
+  if (stocks_mp.length>0) {
+    const mpCodes  = stocks_mp.map(m=>m.libelle.slice(0,8));
+    const mpCouvs  = stocks_mp.map(m=>m.besoin_mensuel>0?Math.min(3,m.stock/m.besoin_mensuel):0);
+    pdfBarChart(doc,'Couverture stocks (mois)',mpCodes,mpCouvs,{color:'#34D399',unite:' mois'});
+  }
+
   // ── V. OPTIMISATION TEMPS DE TRAVAIL ──
   pdfSection(doc, "Optimisation du temps de travail");
   pdfTableau(doc,
@@ -919,6 +1188,10 @@ function pdfTendances(doc, d) {
   );
 
   if (credits_total > 0) {
+    // Graphique plan remboursement
+    if (charts && capaciteRemb > 0) {
+      try { pdfGraphique(doc, charts.graphiqueRemboursement(credits_total, capaciteRemb), 'Graphique — Évolution du capital restant dû', 200); } catch(e) {}
+    }
     doc.moveDown(0.5);
     pdfSection(doc, "Coefficient et plan de remboursement");
     pdfTableau(doc,
