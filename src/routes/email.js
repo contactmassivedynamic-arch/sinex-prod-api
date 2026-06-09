@@ -40,8 +40,23 @@ router.post('/config', auth, role(DG), async (req, res) => {
 // POST tester connexion SMTP
 router.post('/tester', auth, role(DG), async (req, res) => {
   try {
-    await testerConnexion(req.body);
-    res.json({message:'Connexion SMTP OK ✓'});
+    const nodemailer = require('nodemailer');
+    const port = parseInt(req.body.smtp_port||587);
+    const t = nodemailer.createTransport({
+      host: req.body.smtp_host||'smtp.gmail.com', port,
+      secure: port===465,
+      auth: {user:req.body.smtp_user, pass:req.body.smtp_pass},
+      tls:{rejectUnauthorized:false},
+      connectionTimeout:15000,
+    });
+    // Envoyer un email de test
+    await t.sendMail({
+      from:`"SINEX SA" <${req.body.smtp_user}>`,
+      to: req.body.smtp_user,
+      subject:'Test SMTP — SINEX SA Dashboard',
+      text:'Configuration SMTP opérationnelle ✓',
+    });
+    res.json({message:'Email de test envoyé ✓ — vérifiez votre boîte mail'});
   } catch(e) { res.status(400).json({message:'Erreur SMTP: '+e.message}); }
 });
 

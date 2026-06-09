@@ -4,24 +4,26 @@
 const nodemailer = require('nodemailer');
 
 function creerTransport(config) {
+  const port = parseInt(config.smtp_port || 587);
   return nodemailer.createTransport({
-    host:   config.smtp_host   || 'smtp.gmail.com',
-    port:   parseInt(config.smtp_port || 587),
-    secure: config.smtp_port === '465',
+    host:   config.smtp_host || 'smtp.gmail.com',
+    port:   port,
+    secure: port === 465,
     auth: {
       user: config.smtp_user,
       pass: config.smtp_pass,
     },
-    tls: { rejectUnauthorized: false }
+    tls: { rejectUnauthorized: false, ciphers: 'SSLv3' },
+    connectionTimeout: 30000,
+    greetingTimeout:   15000,
+    socketTimeout:     30000,
   });
 }
 
 async function envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport, mois, dgNom }) {
   console.log('[SMTP] Création transport...');
   const transporter = creerTransport(config);
-  console.log('[SMTP] Vérification connexion...');
-  await transporter.verify();
-  console.log('[SMTP] Connexion OK');
+  console.log('[SMTP] Transport créé, envoi direct...');
 
   const moisLabel = new Date(mois+'-01').toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
   const sujet = (config.objet_email||'Rapport {mois} SINEX SA')
@@ -31,11 +33,17 @@ async function envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport, mo
 
   const destinataires = [];
   const DEST_DEF = {
-    dg:  'dg@sinex-sa.tg',
+    dg:  'boumzinaraina@gmail.com',
     pdg: 'pdg@ceco.tg',
-    pca: 'pca@sinex-sa.tg',
+    pca: 'pca.sinex@gmail.com',
   };
-  (config.destinataires||['dg']).forEach(d=>{
+  const destList = Array.isArray(config.destinataires)
+    ? config.destinataires
+    : (typeof config.destinataires === 'string'
+        ? JSON.parse(config.destinataires || '[]')
+        : []);
+
+  destList.forEach(d => {
     if(DEST_DEF[d]) destinataires.push(DEST_DEF[d]);
   });
   if(config.emails_supplementaires){
@@ -43,7 +51,9 @@ async function envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport, mo
       const t=e.trim(); if(t) destinataires.push(t);
     });
   }
-  if(!destinataires.length) throw new Error('Aucun destinataire configuré');
+  // Si toujours vide, envoyer au DG par défaut
+  if(!destinataires.length) destinataires.push('dg@sinex-sa.tg');
+  console.log('[SMTP] Envoi vers:', destinataires.join(', '));
 
   const attachments = [];
   if(pdfBuffer) attachments.push({
