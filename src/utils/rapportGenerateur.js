@@ -340,7 +340,7 @@ function drawWatermark(doc) {
     const x = (W - logoSize) / 2;
     const y = (H - logoSize) / 2;
     doc.save();
-    doc.opacity(0.045); // très adouci
+    doc.opacity(0.10); // visible mais discret
     doc.image(LOGO_PATH, x, y, {width: logoSize, height: logoSize, fit:[logoSize,logoSize], align:'center', valign:'center'});
     doc.restore();
   } catch(e) {}
