@@ -223,7 +223,10 @@ async function xlATP(wb, d, mois='') {
   xlLigne(ws,['BMF',fmt(bmfP),fmtP(tmbhtp*0.15/0.35),'']);
   xlLigne(ws,['Frais de Siège',fmt(fsP),fmtP(tmbhtp*0.10/0.35),'']);
   xlLigne(ws,['Amortissement',fmt(fsP),fmtP(tmbhtp*0.10/0.35),'']);
-  xlLigne(ws,['TOTAL',fmt(bmfP+fsP+fsP),'32 %',''],{bold:true,bg:'#0F172A',color:'#F8FAFC'});
+  const mbhtpXl=cahtp-cdhtp;
+  const bmfPxl=mbhtpXl*(15/35),fsPxl=mbhtpXl*(10/35);
+  const bmfTxPxl=tmbhtp*(15/35),fsTxPxl=tmbhtp*(10/35);
+  xlLigne(ws,['TOTAL',fmt(bmfPxl+fsPxl+fsPxl),fmtP(bmfTxPxl+fsTxPxl+fsTxPxl),''],{bold:true,bg:'#0F172A',color:'#F8FAFC'});
 
   xlSection(ws,sec++,'Marges brutes — Réalisation',4);
   xlEntete(ws,['#','Libellé','Montant réalisé (FCFA)','']);
@@ -237,7 +240,10 @@ async function xlATP(wb, d, mois='') {
   xlLigne(ws,['BMF',fmt(bmfR),fmtP(tmbhtr*0.15/0.35),'']);
   xlLigne(ws,['Frais de Siège',fmt(fsR),fmtP(tmbhtr*0.10/0.35),'']);
   xlLigne(ws,['Amortissement',fmt(fsR),fmtP(tmbhtr*0.10/0.35),'']);
-  xlLigne(ws,['TOTAL',fmt(bmfR+fsR+fsR),fmtP((bmfR+fsR+fsR)>0?0.32:0),''],{bold:true,bg:'#0F172A',color:'#F8FAFC'});
+  const mbhtrXl=cahtr-cdhtr;
+  const bmfRxl=mbhtrXl*(15/35),fsRxl=mbhtrXl*(10/35);
+  const bmfTxRxl=tmbhtr*(15/35),fsTxRxl=tmbhtr*(10/35);
+  xlLigne(ws,['TOTAL',fmt(bmfRxl+fsRxl+fsRxl),fmtP(bmfTxRxl+fsTxRxl+fsTxRxl),''],{bold:true,bg:'#0F172A',color:'#F8FAFC'});
 
   if(d.charges&&Object.values(d.charges).some(v=>parseFloat(v||0)>0)){
     xlSection(ws,sec++,'Charges indirectes (CIHT)',4);
@@ -340,7 +346,7 @@ function drawWatermark(doc) {
     const x = (W - logoSize) / 2;
     const y = (H - logoSize) / 2;
     doc.save();
-    doc.opacity(0.10); // visible mais discret
+    doc.opacity(0.13); // visible et discret
     doc.image(LOGO_PATH, x, y, {width: logoSize, height: logoSize, fit:[logoSize,logoSize], align:'center', valign:'center'});
     doc.restore();
   } catch(e) {}
@@ -509,13 +515,34 @@ function pdfTableau(doc, entetes, lignes, widths=null) {
   doc.moveDown(0.3);
 }
 
+function pdfLigneTotale(doc, vals, widths) {
+  if (doc.y > doc.page.height-60) { doc.addPage(); drawWatermark(doc); doc.moveDown(0.5); }
+  const W=doc.page.width-90;
+  const y=doc.y;
+  doc.rect(45,y-1,W,15).fill('#1E293B');
+  let x=45;
+  vals.forEach((v,i)=>{
+    if(i>=widths.length) return;
+    const text=typeof v==='object'?String(v.text||''):String(v||'');
+    doc.fillColor('#F8FAFC').fontSize(8.5).font('Helvetica-Bold')
+       .text(text,x+3,y+2,{width:widths[i]-6,ellipsis:true,lineBreak:false});
+    x+=widths[i];
+  });
+  doc.moveDown(0.85);
+}
+
 function pdfProduction(doc, d) {
   resetSec();
+
+  // Totaux saisies
+  const saisies = d.saisies||[];
+  const valides = saisies.filter(s=>s.statut==='valide');
+  const totJours = saisies.reduce((a,s)=>a+(parseFloat(s.jours_ouvres)||0),0);
 
   pdfSection(doc,'Saisies journalières de production');
   pdfTableau(doc,
     ['Date','C12','C24','F6/1,5L','F6/0,5L','F6/1L','HILIO','Jrs','Statut'],
-    (d.saisies||[]).map(s=>[
+    saisies.map(s=>[
       strDate(s.date_production)||'—',
       fmt(s.c12||0),fmt(s.c24||0),fmt(s.f615||0),fmt(s.f605||0),fmt(s.f61||0),fmt(s.hilio||0),
       s.jours_ouvres||1,
@@ -525,27 +552,47 @@ function pdfProduction(doc, d) {
     ]),
     [55,38,38,42,42,38,38,28,55]
   );
+  // Ligne total saisies
+  pdfLigneTotale(doc,[
+    `TOTAL — ${valides.length} validée(s) / ${saisies.length} saisie(s)`,
+    fmt(saisies.reduce((a,s)=>a+(s.c12||0),0)),
+    fmt(saisies.reduce((a,s)=>a+(s.c24||0),0)),
+    fmt(saisies.reduce((a,s)=>a+(s.f615||0),0)),
+    fmt(saisies.reduce((a,s)=>a+(s.f605||0),0)),
+    fmt(saisies.reduce((a,s)=>a+(s.f61||0),0)),
+    fmt(saisies.reduce((a,s)=>a+(s.hilio||0),0)),
+    fmt(totJours),'',
+  ],[55,38,38,42,42,38,38,28,55]);
 
   pdfSection(doc,'Totaux des productions validées');
   const t=d.totaux||{};
+  let caTotal=0,cdTotal=0,qtyTotal=0;
   pdfTableau(doc,['Format','Qté','CA HT (FCFA)','CD HT (FCFA)','MB HT (FCFA)','TMB HT'],
     [['C12',12],['C24',24],['F615',6],['F605',6],['F61',6],['HILIO',30]].map(([code])=>{
       const q=(t[code.toLowerCase()]||0),ca=q*(PRIX_PF[code]||0),cd=q*(CD_UNIT[code]||0);
+      caTotal+=ca; cdTotal+=cd; qtyTotal+=q;
       return [code,fmt(q),fmt(ca),fmt(cd),fmt(ca-cd),ca>0?fmtP((ca-cd)/ca):'—'];
     }),
     [55,45,95,95,95,55]
   );
+  pdfLigneTotale(doc,[
+    'TOTAL GÉNÉRAL',fmt(qtyTotal),fmt(caTotal),fmt(cdTotal),
+    fmt(caTotal-cdTotal),caTotal>0?fmtP((caTotal-cdTotal)/caTotal):'—',
+  ],[55,45,95,95,95,55]);
 
   pdfSection(doc,'Consommation réelle des intrants');
   const cc=d.consommations_cumulees||{},rc=d.rebuts_cumules||{};
+  let valeurTotale=0;
   pdfTableau(doc,['Intrant','Théorique','Rebuts','Total réel','Prix HT','Valeur HT'],
     [['Préformes 32g','PREF_32G',53],['Préformes 17g','PREF_17G',28],['Bouchons','BOUCH_VERT',5],
      ['Étiq. 1,5L','ETI_15L',9],['Étiq. 0,5L','ETI_05L',6],['Cartons C12','CTN_15L',233],['Cartons C24','CTN_05L',200]].map(([nom,code,prix])=>{
-      const theo=cc[code]||0,reb=rc[code]||0;
-      return [nom,fmt(theo),fmt(reb),fmt(theo+reb),fmt(prix),fmt((theo+reb)*prix)];
+      const theo=cc[code]||0,reb=rc[code]||0,val=(theo+reb)*prix;
+      valeurTotale+=val;
+      return [nom,fmt(theo),fmt(reb),fmt(theo+reb),fmt(prix),fmt(val)];
     }),
     [100,52,52,52,52,82]
   );
+  pdfLigneTotale(doc,['TOTAL VALEUR INTRANTS','','','','',fmt(valeurTotale)],[100,52,52,52,52,82]);
 }
 
 function pdfATP(doc, d) {
@@ -555,11 +602,19 @@ function pdfATP(doc, d) {
   const cahtr=parseFloat(atp.real_ca_ht||0),cdhtr=parseFloat(atp.real_cd_ht||0);
   const tmbhtp=parseFloat(atp.proj_tmb||0),tmbhtr=parseFloat(atp.taux_marge_brute||0);
 
+  // Calculs totaux objectifs
+  const qtyObjTotal = ['C24','C12','F605','F615','F61','HILIO'].reduce((a,c)=>a+(obj[c]||0),0);
+  const cahtpCalc   = ['C24','C12','F605','F615','F61','HILIO'].reduce((a,c)=>a+(obj[c]||0)*(PRIX_PF[c]||0),0);
+
   pdfSection(doc,'Objectifs de production — Projection');
   pdfTableau(doc,['Produit','Qté objectif','Prix vente HT (FCFA)','CAHTP (FCFA)'],
     ['C24','C12','F605','F615','F61','HILIO'].map(c=>[c,fmt(obj[c]||0),fmt(PRIX_PF[c]||0),fmt((obj[c]||0)*(PRIX_PF[c]||0))]),
     [70,90,140,140]
   );
+  pdfLigneTotale(doc,['TOTAL',fmt(qtyObjTotal),'',fmt(cahtpCalc)],[70,90,140,140]);
+
+  const qtyRealTotal = ['C24','C12','F605','F615','F61','HILIO'].reduce((a,c)=>a+(real[c]||0),0);
+  const cahtrCalc    = ['C24','C12','F605','F615','F61','HILIO'].reduce((a,c)=>a+(real[c]||0)*(PRIX_PF[c]||0),0);
 
   pdfSection(doc,'Réalisation en cours — Cumulé automatique');
   pdfTableau(doc,['Produit','Qté réalisée','Montant HT (FCFA)','Avancement'],
@@ -569,6 +624,7 @@ function pdfATP(doc, d) {
     }),
     [70,90,140,140]
   );
+  pdfLigneTotale(doc,['TOTAL',fmt(qtyRealTotal),fmt(cahtrCalc),cahtpCalc>0?((cahtrCalc/cahtpCalc)*100).toFixed(1)+' %':'—'],[70,90,140,140]);
 
   pdfSection(doc,'Marges brutes — Projection');
   pdfTableau(doc,['#','Libellé','Prévisionnel (FCFA)',''],
@@ -578,12 +634,15 @@ function pdfATP(doc, d) {
      ['4','TMBHTP = MBHTP / CAHTP','',{text:fmtP(tmbhtp),bold:true}]],
     [25,155,155,105]
   );
-  const bmfP=tmbhtp>0?(cahtp*0.35)/(tmbhtp*0.15):0,fsP=tmbhtp>0?(cahtp*0.35)/(tmbhtp*0.10):0;
+  const mbhtp = cahtp - cdhtp;
+  const bmfP = mbhtp*(15/35), fsP = mbhtp*(10/35), ammP = mbhtp*(10/35);
+  const bmfTxP = tmbhtp*(15/35), fsTxP = tmbhtp*(10/35), ammTxP = tmbhtp*(10/35);
   pdfSection(doc,'Répartition MBHTP prévisionnelle');
   pdfTableau(doc,['Rubrique','Montant (FCFA)','Taux',''],
-    [['BMF',fmt(bmfP),fmtP(tmbhtp*0.15/0.35),''],['Frais de Siège',fmt(fsP),fmtP(tmbhtp*0.10/0.35),''],['Amortissement',fmt(fsP),fmtP(tmbhtp*0.10/0.35),'']],
+    [['BMF',fmt(bmfP),fmtP(bmfTxP),''],['Frais de Siège',fmt(fsP),fmtP(fsTxP),''],['Amortissement',fmt(ammP),fmtP(ammTxP),'']],
     [110,145,110,75]
   );
+  pdfLigneTotale(doc,['TOTAL RÉPARTITION',fmt(bmfP+fsP+ammP),fmtP(bmfTxP+fsTxP+ammTxP),''],[110,145,110,75]);
 
   pdfSection(doc,'Marges brutes — Réalisation');
   pdfTableau(doc,['#','Libellé','Réalisé (FCFA)',''],
@@ -593,12 +652,15 @@ function pdfATP(doc, d) {
      ['8','TMBHTR = MBHTR / CAHTR','',{text:fmtP(tmbhtr),bold:true}]],
     [25,155,155,105]
   );
-  const bmfR=tmbhtr>0?(cahtr*0.35)/(tmbhtr*0.15):0,fsR=tmbhtr>0?(cahtr*0.35)/(tmbhtr*0.10):0;
+  const mbhtr = cahtr - cdhtr;
+  const bmfR = mbhtr*(15/35), fsR = mbhtr*(10/35), ammR = mbhtr*(10/35);
+  const bmfTxR = tmbhtr*(15/35), fsTxR = tmbhtr*(10/35), ammTxR = tmbhtr*(10/35);
   pdfSection(doc,'Répartition MBHTR réalisée');
   pdfTableau(doc,['Rubrique','Montant réalisé (FCFA)','Taux réalisé',''],
-    [['BMF',fmt(bmfR),fmtP(tmbhtr*0.15/0.35),''],['Frais de Siège',fmt(fsR),fmtP(tmbhtr*0.10/0.35),''],['Amortissement',fmt(fsR),fmtP(tmbhtr*0.10/0.35),'']],
+    [['BMF',fmt(bmfR),fmtP(bmfTxR),''],['Frais de Siège',fmt(fsR),fmtP(fsTxR),''],['Amortissement',fmt(ammR),fmtP(ammTxR),'']],
     [110,145,110,75]
   );
+  pdfLigneTotale(doc,['TOTAL RÉPARTITION',fmt(bmfR+fsR+ammR),fmtP(bmfTxR+fsTxR+ammTxR),''],[110,145,110,75]);
 
   if(d.charges&&Object.values(d.charges).some(v=>parseFloat(v||0)>0)){
     pdfSection(doc,'Charges indirectes (CIHT)');
@@ -637,6 +699,8 @@ function pdfTresorerie(doc, d) {
     [160,70,135,75]
   );
 
+  const totalEntrees=(d.mouvements||[]).filter(m=>m.sens==='credit').reduce((a,m)=>a+parseFloat(m.montant_fcfa||0),0);
+  const totalSorties=(d.mouvements||[]).filter(m=>m.sens==='debit').reduce((a,m)=>a+parseFloat(m.montant_fcfa||0),0);
   pdfSection(doc,'Brouillard de caisse');
   pdfTableau(doc,['Date','Compte','Libellé','Entrée (FCFA)','Sortie (FCFA)','Solde'],
     (d.mouvements||[]).map(m=>{
@@ -648,6 +712,7 @@ function pdfTresorerie(doc, d) {
     }),
     [58,82,98,68,68,66]
   );
+  pdfLigneTotale(doc,[`TOTAL — ${(d.mouvements||[]).length} mouvement(s)`,'','',fmt(totalEntrees),fmt(totalSorties),''],[58,82,98,68,68,66]);
 }
 
 function pdfRebuts(doc, d) {
