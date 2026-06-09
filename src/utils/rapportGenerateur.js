@@ -6,8 +6,6 @@ const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const path = require('path');
 const fs   = require('fs');
-let charts = null;
-try { charts = require('./chartGenerator'); } catch(e) { console.warn('[CHARTS] chartGenerator non disponible'); }
 
 const LOGO_PATH = path.join(__dirname, 'logo_sinex.png');
 const SIG_PATH  = path.join(__dirname, 'signature_dg.png');
@@ -508,24 +506,6 @@ function pdfJauge(doc, label, valeur, maxi, options={}) {
   doc.moveDown(1.0);
 }
 
-function pdfGraphique(doc, imgBuffer, titre, h=200) {
-  if (!imgBuffer) return;
-  try {
-    if (doc.y + h + 30 > doc.page.height - 80) {
-      doc.addPage(); drawWatermark(doc); doc.moveDown(0.5);
-    }
-    if (titre) {
-      doc.fillColor('#64748B').fontSize(8.5).font('Helvetica-Bold')
-         .text(titre.toUpperCase(), 45, doc.y, {width:doc.page.width-90});
-      doc.moveDown(0.3);
-    }
-    const W = doc.page.width - 90;
-    doc.image(imgBuffer, 45, doc.y, {width:W, height:h});
-    doc.y += h + 12;
-    doc.moveDown(0.3);
-  } catch(e) { console.error('[CHART INSERT]', e.message); }
-}
-
 function drawWatermark(doc) {
   try {
     if (!fs.existsSync(LOGO_PATH)) return;
@@ -771,10 +751,6 @@ function pdfProduction(doc, d) {
     pdfBarChart(doc,'Production C24 journalière (cartons)',joursLabels,joursC24,{color:'#34D399',unite:' ctn'});
   }
 
-  // Graphique barres production
-  if (charts) {
-    try { pdfGraphique(doc, charts.graphiqueBarresProduction(d.totaux||{}), 'Graphique — Production par format', 200); } catch(e) {}
-  }
   pdfSection(doc,'Totaux des productions validées');
   const t=d.totaux||{};
   let caTotal=0,cdTotal=0,qtyTotal=0;
@@ -854,15 +830,6 @@ function pdfATP(doc, d) {
     if(obj>0||ob2>0) pdfJauge(doc,code,obj,Math.max(ob2,obj));
   });
 
-  // Graphique avancement ATP
-  if (charts) {
-    try { pdfGraphique(doc, charts.graphiqueAvancementATP(d.objectifs||{}, d.realisations||{}), 'Graphique — Objectifs vs Réalisations ATP', 180); } catch(e) {}
-  }
-  // Graphique camembert MB
-  const mbhtp2 = cahtp - cdhtp;
-  if (charts && mbhtp2 > 0) {
-    try { pdfGraphique(doc, charts.graphiqueCamembertMB(mbhtp2*(15/35), mbhtp2*(10/35), mbhtp2*(10/35)), 'Graphique — Répartition MBHTP', 200); } catch(e) {}
-  }
   pdfSection(doc,'Marges brutes — Projection');
   pdfTableau(doc,['#','Libellé','Prévisionnel (FCFA)',''],
     [['1','CAHTP',fmt(cahtp),''],
@@ -935,11 +902,6 @@ function pdfTresorerie(doc, d) {
      ,['TOTAL TRÉSORERIE','',{text:fmt((d.comptes||[]).reduce((s,c)=>s+parseFloat(c.solde_fcfa||0),0)),bold:true},'']],
     [160,70,135,75]
   );
-
-  // Graphique flux trésorerie
-  if (charts && d.mouvements && d.mouvements.length > 0) {
-    try { pdfGraphique(doc, charts.graphiqueFluxTresorerie(d.mouvements), 'Graphique — Flux de trésorerie par compte', 200); } catch(e) {}
-  }
   const totalEntrees=(d.mouvements||[]).filter(m=>m.sens==='credit').reduce((a,m)=>a+parseFloat(m.montant_fcfa||0),0);
   const totalSorties=(d.mouvements||[]).filter(m=>m.sens==='debit').reduce((a,m)=>a+parseFloat(m.montant_fcfa||0),0);
   pdfSection(doc,'Brouillard de caisse');
@@ -1028,14 +990,7 @@ function pdfTendances(doc, d) {
   const volMoyens = d.vol_moyens || {C12:0,C24:0,F615:0,F605:0,F61:0,HILIO:0};
 
   // ── I. POTENTIEL HORAIRE DE L'USINE ──
-  // Graphique jauge utilisation usine
-  if (charts && d.jours_moyens > 0) {
-    try { pdfGraphique(doc, charts.graphiqueJaugeUsine(d.jours_moyens/26), 'Graphique — Taux utilisation usine', 180); } catch(e) {}
-  }
-  // Graphique évolution CA
-  if (charts && hist.length >= 2) {
-    try { pdfGraphique(doc, charts.graphiqueCourbeCA(hist), 'Graphique — Évolution CA HT et MB HT', 220); } catch(e) {}
-  }
+
   pdfSection(doc, "Potentiel horaire et capacite de l'usine");
   pdfTableau(doc,
     ['Parametre','Valeur','Detail'],
@@ -1188,10 +1143,6 @@ function pdfTendances(doc, d) {
   );
 
   if (credits_total > 0) {
-    // Graphique plan remboursement
-    if (charts && capaciteRemb > 0) {
-      try { pdfGraphique(doc, charts.graphiqueRemboursement(credits_total, capaciteRemb), 'Graphique — Évolution du capital restant dû', 200); } catch(e) {}
-    }
     doc.moveDown(0.5);
     pdfSection(doc, "Coefficient et plan de remboursement");
     pdfTableau(doc,
