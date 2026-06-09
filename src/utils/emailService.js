@@ -17,7 +17,11 @@ function creerTransport(config) {
 }
 
 async function envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport, mois, dgNom }) {
+  console.log('[SMTP] Création transport...');
   const transporter = creerTransport(config);
+  console.log('[SMTP] Vérification connexion...');
+  await transporter.verify();
+  console.log('[SMTP] Connexion OK');
 
   const moisLabel = new Date(mois+'-01').toLocaleDateString('fr-FR',{month:'long',year:'numeric'});
   const sujet = (config.objet_email||'Rapport {mois} SINEX SA')

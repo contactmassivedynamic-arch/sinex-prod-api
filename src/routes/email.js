@@ -75,10 +75,14 @@ router.post('/envoyer', auth, role(DG), async (req, res) => {
       donnees.totaux = {c12:v.reduce((a,s)=>a+s.c12,0),c24:v.reduce((a,s)=>a+s.c24,0),f615:v.reduce((a,s)=>a+s.f615,0),f605:v.reduce((a,s)=>a+s.f605,0),f61:v.reduce((a,s)=>a+s.f61,0),hilio:v.reduce((a,s)=>a+s.hilio,0)};
     } catch {}
 
+    console.log('[EMAIL] Génération PDF/Excel...');
     const [pdfBuffer, excelBuffer] = await Promise.all([
-      genererPDF(type_rapport||'production', donnees, moisRap).catch(()=>null),
-      genererExcel(type_rapport||'production', donnees, moisRap).catch(()=>null),
+      genererPDF(type_rapport||'production', donnees, moisRap).catch(e=>{console.error('[EMAIL] PDF error:',e.message);return null;}),
+      genererExcel(type_rapport||'production', donnees, moisRap).catch(e=>{console.error('[EMAIL] Excel error:',e.message);return null;}),
     ]);
+    console.log('[EMAIL] PDF:', pdfBuffer?.length||0, 'bytes | Excel:', excelBuffer?.length||0, 'bytes');
+    console.log('[EMAIL] Config SMTP:', config.smtp_host, config.smtp_port, config.smtp_user);
+    console.log('[EMAIL] Destinataires:', config.destinataires, config.emails_supplementaires);
 
     const result = await envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport:type_rapport||'production', mois:moisRap, dgNom });
 
@@ -87,15 +91,6 @@ router.post('/envoyer', auth, role(DG), async (req, res) => {
       [type_rapport||'production',`Rapport envoyé par email — ${moisRap}`,moisRap,req.user.id]).catch(()=>{});
 
     res.json({message:`Email envoyé ✓ — ${result.destinataires.length} destinataire(s)`, destinataires: result.destinataires});
-  } catch(e) { res.status(500).json({message:e.message}); }
-});
-
-// POST /api/email/redemarrer — redémarrer les crons après changement config
-router.post('/redemarrer', auth, role(DG), async (req, res) => {
-  try {
-    const { demarrerCrons } = require('../utils/cronJobs');
-    await demarrerCrons();
-    res.json({message:'Crons redémarrés ✓'});
   } catch(e) { res.status(500).json({message:e.message}); }
 });
 
