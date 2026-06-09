@@ -8,6 +8,7 @@ const path = require('path');
 const fs   = require('fs');
 
 const LOGO_PATH = path.join(__dirname, 'logo_sinex.png');
+const SIG_PATH  = path.join(__dirname, 'signature_dg.png');
 
 const PRIX_PF = {C12:2116.10,C24:2033.90,F615:1032.00,F605:429.00,F61:1186.00,HILIO:169.00};
 const CD_UNIT = {C12:1037,C24:1136,F615:450.79,F605:282.79,F61:438.79,HILIO:75.23};
