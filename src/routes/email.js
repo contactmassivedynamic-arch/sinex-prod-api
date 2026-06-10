@@ -46,7 +46,7 @@ router.post('/config', auth, role(DG), async (req, res) => {
        actif||false, frequence||'mensuel']
     );
     res.json({message:'Configuration sauvegardée ✓'});
-  } catch(e) { res.status(500).json({message:e.message}); }
+  } catch(e) { console.error('[CONFIG ERROR]', e.message, e.detail||''); res.status(500).json({message:e.message}); }
 });
 
 // POST tester
