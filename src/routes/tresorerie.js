@@ -1,4 +1,5 @@
 const router = require('express').Router();
+// Structure attendue : date_mouvement | sens (credit/debit) | nature_operation | description | montant_fcfa | piece_justificative | saisi_par_nom
 const pool   = require('../db/pool');
 const auth   = require('../middleware/auth');
 const role   = require('../middleware/role');
@@ -29,10 +30,7 @@ router.get('/mouvements', auth, async (req, res) => {
   try {
     const {mois, type, compte_id, annee} = req.query;
     let q = `
-      SELECT m.id, m.sens, m.montant_fcfa, m.date_mouvement,
-        m.description, m.type_operation, m.created_at,
-        c.libelle AS compte_libelle, c.code AS compte_code, c.type_compte,
-        u.nom_complet AS saisi_par_nom,
+      SELECT m.id, m.date_mouvement, m.sens, COALESCE(m.nature_operation,'') AS nature_operation, m.description, m.montant_fcfa, COALESCE(m.piece_justificative,'') AS piece_justificative, m.solde_apres, c.libelle AS compte_libelle, c.code AS compte_code, u.nom_complet AS saisi_par_nom,
         SUM(CASE WHEN m2.sens='credit' THEN m2.montant_fcfa WHEN m2.sens='debit' THEN -m2.montant_fcfa ELSE 0 END)
           OVER (PARTITION BY m.compte_id ORDER BY m.date_mouvement, m.id) AS solde_apres
       FROM tresorerie_mouvements m
@@ -47,7 +45,12 @@ router.get('/mouvements', auth, async (req, res) => {
     if (annee) { params.push(annee); q += ` AND TO_CHAR(m.date_mouvement,'YYYY')=$${params.length}`; }
     if (type && type!=='all') { params.push(type); q += ` AND m.sens=$${params.length}`; }
     if (compte_id && compte_id!=='all') { params.push(compte_id); q += ` AND m.compte_id=$${params.length}`; }
-    q += ` ORDER BY m.date_mouvement DESC, m.id DESC`;
+    q += ` ORDER BY
+      CASE WHEN m.sens='solde_debut' THEN 0
+           WHEN m.sens='debit' THEN 1
+           WHEN m.sens='credit' THEN 2
+           ELSE 3 END,
+      m.date_mouvement ASC, m.id ASC`;
     const {rows} = await pool.query(q, params);
     res.json(rows);
   } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
@@ -56,9 +59,9 @@ router.get('/mouvements', auth, async (req, res) => {
 // POST /api/tresorerie/mouvements — ajouter
 router.post('/mouvements', auth, async (req, res) => {
   try {
-    const {compte_id, sens, montant_fcfa, date_mouvement, description, type_operation} = req.body;
+    const {compte_id, sens, montant_fcfa, date_mouvement, description, type_operation, nature_operation, piece_justificative} = req.body;
     await pool.query(
-      `INSERT INTO tresorerie_mouvements (compte_id,sens,montant_fcfa,date_mouvement,description,type_operation,saisi_par_id)
+      `INSERT INTO tresorerie_mouvements (compte_id,sens,montant_fcfa,date_mouvement,description,type_operation,nature_operation,piece_justificative,saisi_par_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
       [compte_id, sens, montant_fcfa, date_mouvement||new Date(), description||'', type_operation||'autre', req.user.id]
     );
