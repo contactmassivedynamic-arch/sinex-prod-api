@@ -110,9 +110,13 @@ router.post('/config', auth, role(DG), async (req, res) => {
       INSERT INTO config_email_rapports (id,resend_api_key,destinataires,emails_supplementaires,objet_email,message_email,actif,frequence)
       VALUES (1,$1,$2,$3,$4,$5,$6,$7)
       ON CONFLICT (id) DO UPDATE SET
-        resend_api_key=COALESCE($1,resend_api_key),
-        destinataires=$2, emails_supplementaires=$3,
-        objet_email=$4, message_email=$5, actif=$6, frequence=$7`,
+        resend_api_key=COALESCE(EXCLUDED.resend_api_key,config_email_rapports.resend_api_key),
+        destinataires=EXCLUDED.destinataires,
+        emails_supplementaires=EXCLUDED.emails_supplementaires,
+        objet_email=EXCLUDED.objet_email,
+        message_email=EXCLUDED.message_email,
+        actif=EXCLUDED.actif,
+        frequence=EXCLUDED.frequence`,
       [resend_api_key||null,
        JSON.stringify(destinataires||['dg']),
        emails_supplementaires||'',
