@@ -24,7 +24,7 @@ router.post('/config', auth, role(DG), async (req, res) => {
       INSERT INTO config_email_rapports (id,smtp_host,smtp_port,smtp_user,smtp_pass,destinataires,emails_supplementaires,objet_email,message_email,actif,frequence)
       VALUES (1,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
       ON CONFLICT (id) DO UPDATE SET
-        smtp_host=$1,smtp_port=$2,smtp_user=$3,smtp_pass=$4,resend_api_key=COALESCE($11,resend_api_key),
+        smtp_host=$1,smtp_port=$2,smtp_user=$3,smtp_pass=$4,
         destinataires=$5,emails_supplementaires=$6,
         objet_email=$7,message_email=$8,actif=$9,frequence=$10`,
       [smtp_host||'smtp.gmail.com',smtp_port||'587',smtp_user,smtp_pass,
@@ -37,25 +37,12 @@ router.post('/config', auth, role(DG), async (req, res) => {
   } catch(e) { res.status(500).json({message:e.message}); }
 });
 
-// POST tester connexion Resend
+// POST tester connexion SMTP
 router.post('/tester', auth, role(DG), async (req, res) => {
   try {
-    const { testerConnexion } = require('../utils/emailService');
-    // Récupérer config DB
-    const { rows: cfg } = await pool.query('SELECT * FROM config_email_rapports WHERE id=1').catch(()=>({rows:[]}));
-    const config = cfg[0] || req.body;
-    const { Resend } = require('resend');
-    const apiKey = req.body.resend_api_key || config.resend_api_key || process.env.RESEND_API_KEY;
-    if (!apiKey) throw new Error('Clé API Resend manquante');
-    const resend = new Resend(apiKey);
-    await resend.emails.send({
-      from: 'SINEX SA <onboarding@resend.dev>',
-      to: ['boumzinaraina@gmail.com'],
-      subject: 'Test configuration email — SINEX SA',
-      text: 'Configuration email opérationnelle ✓ — SINEX SA Dashboard',
-    });
-    res.json({message:'Email de test envoyé ✓ — vérifiez boumzinaraina@gmail.com'});
-  } catch(e) { console.error('[RESEND TEST ERROR]',e.message); res.status(400).json({message:'Erreur: '+e.message}); }
+    await testerConnexion(req.body);
+    res.json({message:'Connexion SMTP OK ✓'});
+  } catch(e) { res.status(400).json({message:'Erreur SMTP: '+e.message}); }
 });
 
 // POST envoyer maintenant
@@ -88,14 +75,10 @@ router.post('/envoyer', auth, role(DG), async (req, res) => {
       donnees.totaux = {c12:v.reduce((a,s)=>a+s.c12,0),c24:v.reduce((a,s)=>a+s.c24,0),f615:v.reduce((a,s)=>a+s.f615,0),f605:v.reduce((a,s)=>a+s.f605,0),f61:v.reduce((a,s)=>a+s.f61,0),hilio:v.reduce((a,s)=>a+s.hilio,0)};
     } catch {}
 
-    console.log('[EMAIL] Génération PDF/Excel...');
     const [pdfBuffer, excelBuffer] = await Promise.all([
-      genererPDF(type_rapport||'production', donnees, moisRap).catch(e=>{console.error('[EMAIL] PDF error:',e.message);return null;}),
-      genererExcel(type_rapport||'production', donnees, moisRap).catch(e=>{console.error('[EMAIL] Excel error:',e.message);return null;}),
+      genererPDF(type_rapport||'production', donnees, moisRap).catch(()=>null),
+      genererExcel(type_rapport||'production', donnees, moisRap).catch(()=>null),
     ]);
-    console.log('[EMAIL] PDF:', pdfBuffer?.length||0, 'bytes | Excel:', excelBuffer?.length||0, 'bytes');
-    console.log('[EMAIL] Config SMTP:', config.smtp_host, config.smtp_port, config.smtp_user);
-    console.log('[EMAIL] Destinataires:', config.destinataires, config.emails_supplementaires);
 
     const result = await envoyerRapport({ config, pdfBuffer, excelBuffer, type_rapport:type_rapport||'production', mois:moisRap, dgNom });
 
