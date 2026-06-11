@@ -32,7 +32,7 @@ router.get('/soldes', auth, async (req, res) => {
         ),0) AS sorties_mois,
         -- Entrées du mois (hors report)
         COALESCE(SUM(
-          CASE WHEN sm.type_mouvement='entree' AND sm.motif!='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END
+          CASE WHEN sm.type_mouvement='entree' AND COALESCE(sm.motif,'') != 'Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END
         ),0) AS entrees_mois,
         -- Solde fin = début + entrées - sorties
         COALESCE(SUM(
@@ -87,37 +87,68 @@ router.get('/mouvements/resume', auth, async (req, res) => {
   try {
     const {mois, classe} = req.query;
     const params = [];
-    let whereClause = 'WHERE sa.actif=true';
-    if (classe && classe!=='all') { params.push(parseInt(classe)); whereClause += ` AND sa.classe=$${params.length}`; }
 
-    // Construire filtre mois pour les mouvements
-    let moisFilter = '';
-    if (mois) { params.push(mois); moisFilter = `AND TO_CHAR(sm.date_mouvement,'YYYY-MM')=$${params.length}`; }
+    let whereArticle = 'WHERE sa.actif=true';
+    if (classe && classe!=='all') {
+      params.push(parseInt(classe));
+      whereArticle += ` AND sa.classe=$${params.length}`;
+    }
+
+    // Filtre mois sur les mouvements via JOIN conditionnel
+    let joinMois = '';
+    if (mois) {
+      params.push(mois);
+      joinMois = `AND TO_CHAR(sm.date_mouvement,'YYYY-MM')=$${params.length}`;
+    }
 
     const q = `
       SELECT
-        ROW_NUMBER() OVER (ORDER BY sa.classe, sa.libelle) AS num,
+        sa.id,
         sa.code,
         sa.libelle,
         sa.unite,
         sa.prix_unitaire_ht AS prix_ht,
         sa.classe,
-        COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' AND sm.motif='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS stock_debut,
-        COALESCE(SUM(CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS sorties,
-        COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' AND sm.motif!='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS entrees,
-        COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' ${moisFilter} THEN sm.quantite ELSE 0 END),0) -
-        COALESCE(SUM(CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS solde_fin,
-        (COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' ${moisFilter} THEN sm.quantite ELSE 0 END),0) -
-         COALESCE(SUM(CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END),0)) * sa.prix_unitaire_ht AS valeur_ht
+        sa.seuil_alerte,
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree'
+                AND sm.motif='Report solde mois précédent'
+                ${joinMois}
+               THEN sm.quantite ELSE 0 END
+        ),0) AS stock_debut,
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='sortie'
+                ${joinMois}
+               THEN sm.quantite ELSE 0 END
+        ),0) AS sorties,
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree'
+                AND COALESCE(sm.motif,'') != 'Report solde mois précédent'
+                ${joinMois}
+               THEN sm.quantite ELSE 0 END
+        ),0) AS entrees,
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree' ${joinMois} THEN sm.quantite
+               WHEN sm.type_mouvement='sortie' ${joinMois} THEN -sm.quantite
+               ELSE 0 END
+        ),0) AS solde_fin,
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree' ${joinMois} THEN sm.quantite
+               WHEN sm.type_mouvement='sortie' ${joinMois} THEN -sm.quantite
+               ELSE 0 END
+        ),0) * sa.prix_unitaire_ht AS valeur_ht
       FROM stocks_articles sa
       LEFT JOIN stocks_mouvements sm ON sm.article_id=sa.id
-      ${whereClause}
-      GROUP BY sa.id, sa.code, sa.libelle, sa.unite, sa.prix_unitaire_ht, sa.classe
+      ${whereArticle}
+      GROUP BY sa.id, sa.code, sa.libelle, sa.unite, sa.prix_unitaire_ht, sa.classe, sa.seuil_alerte
       ORDER BY sa.classe, sa.libelle
     `;
     const {rows} = await pool.query(q, params);
     res.json(rows);
-  } catch(err) { console.error('[STOCKS RESUME]',err.message); res.status(500).json({message:err.message}); }
+  } catch(err) {
+    console.error('[STOCKS RESUME]', err.message);
+    res.status(500).json({message: err.message});
+  }
 });
 
 // GET /api/stocks/mouvements — avec filtres mois + type + classe
