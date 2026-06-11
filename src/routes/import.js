@@ -40,34 +40,37 @@ router.post('/production', auth, upload.single('fichier'), async (req, res) => {
     const sheetName = wb.SheetNames.find(n=>n.toLowerCase().includes('saisie')||n.toLowerCase().includes('production')) || wb.SheetNames[0];
     const ws = wb.Sheets[sheetName];
 
-    // Lire à partir de la ligne 8 (après entêtes)
-    const data = XLSX.utils.sheet_to_json(ws, { defval:'', range:6 });
+    // Lire par index de colonne (header:1) — robuste peu importe le nom de l'en-tête
+    // Modèle PDT : Col0=Date|Col1=C12|Col2=C24|Col3=F615|Col4=F605|Col5=F61|Col6=HILIO
+    //              Col7=Préf32|Col8=Préf17|Col9=Bouch|Col10=CtnC12|Col11=CtnC24|Col12=Sachets|Col13=Étiq|Col15=Jours
+    const rawRows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
+    // Ignorer les 6 premières lignes (titre + entêtes) et la ligne TOTAUX
+    const data = rawRows.slice(6).filter(r => {
+      const v = String(r[0]||'').trim();
+      return v !== '' && !v.toUpperCase().includes('TOTAL') && !v.toUpperCase().includes('DATE');
+    });
 
     await client.query('BEGIN');
     let importes = 0, erreurs = [];
 
     for (const row of data) {
-      // Colonnes du modèle SINEX SA
-      const dateVal = row['Date production'] || row['Date'] || row['DATE'];
+      const dateVal = row[0];
       const date = parseDate(dateVal);
       if (!date || isNaN(date.getTime())) continue;
 
-      // Ignorer la ligne TOTAL
-      const premVal = String(dateVal||'').toUpperCase();
-      if (premVal.includes('TOTAL') || premVal.includes('MOIS')) continue;
-
-      const jours  = num(row['Jours ouvrés'] || row['Jours'] || row['JOURS'] || 1);
-      const c12    = num(row['C12 (cartons)']  || row['C12']  || 0);
-      const c24    = num(row['C24 (cartons)']  || row['C24']  || 0);
-      const f615   = num(row['F6/1,5L (fardeaux)'] || row['F6/1,5L'] || row['F615'] || 0);
-      const f605   = num(row['F6/0,5L (fardeaux)'] || row['F6/0,5L'] || row['F605'] || 0);
-      const f61    = num(row['F6/1L (fardeaux)']   || row['F6/1L']   || row['F61']  || 0);
-      const hilio  = num(row['HILIO (packs)'] || row['HILIO'] || 0);
-      const p32    = num(row['Reb. Préf.32g']  || row['Reb. Pref.32g']  || row['Rebut Préf.32g'] || 0);
-      const p17    = num(row['Reb. Préf.17g']  || row['Reb. Pref.17g']  || row['Rebut Préf.17g'] || 0);
-      const bouch  = num(row['Reb. Bouchons']  || row['Rebut Bouchons'] || 0);
-      const ctn12  = num(row['Reb. Cartons']   || row['Rebut Cartons']  || 0);
-      const etiq   = num(row['Reb. Étiquettes']|| row['Reb. Etiquettes']|| row['Rebut Étiq.'] || 0);
+      const c12   = num(row[1]);
+      const c24   = num(row[2]);
+      const f615  = num(row[3]);
+      const f605  = num(row[4]);
+      const f61   = num(row[5]);
+      const hilio = num(row[6]);
+      const p32   = num(row[7]);
+      const p17   = num(row[8]);
+      const bouch = num(row[9]);
+      const ctn12 = num(row[10]);
+      const ctn24 = num(row[11]);
+      const etiq  = num(row[13]);
+      const jours = num(row[15]) || 1;
 
       try {
         // Insérer/mettre à jour production_jour
@@ -110,7 +113,7 @@ router.post('/production', auth, upload.single('fichier'), async (req, res) => {
           await client.query(
             `INSERT INTO rebuts (production_id,pref32,pref17,bouchons,ctn_c12,ctn_c24,hilio_rebut,etiquettes)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [pjId, p32, p17, bouch, ctn12, 0, 0, etiq]
+            [pjId, p32, p17, bouch, ctn12, ctn24||0, 0, etiq]
           );
         }
         importes++;
@@ -150,7 +153,20 @@ router.post('/stocks', auth, upload.single('fichier'), async (req, res) => {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
       const isSortie = sheetName.toLowerCase().includes('sort');
-      const data = XLSX.utils.sheet_to_json(ws, { defval:'', range:6 });
+      const rawStk = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
+      // Modèle STK : Col0=N°|Col1=Code|Col2=Désignation|Col3=Unité|Col4=Prix|Col5=StockDébut|Col6=Sorties|Col7=Entrées|Col8=SoldeFin
+      const data = rawStk.slice(5).filter(r => {
+        const code = String(r[1]||'').trim();
+        return code !== '' && !code.toUpperCase().includes('CODE') && !code.toUpperCase().includes('TOTAL');
+      }).map(r => ({
+        code: String(r[1]||'').trim().toUpperCase(),
+        libelle: String(r[2]||'').trim(),
+        unite: String(r[3]||'pièce').trim(),
+        prix: Math.abs(parseFloat(r[4])||0),
+        stock_debut: Math.abs(parseFloat(r[5])||0),
+        sorties: Math.abs(parseFloat(r[6])||0),
+        entrees: Math.abs(parseFloat(r[7])||0),
+      }));
 
       for (const row of data) {
         const code = String(row['Code article']||row['Code']||'').trim();
@@ -204,7 +220,20 @@ router.post('/tresorerie', auth, upload.single('fichier'), async (req, res) => {
 
     const sheetName = wb.SheetNames.find(n=>n.toLowerCase().includes('brouillard')) || wb.SheetNames[0];
     const ws = wb.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(ws, { defval:'', range:6 });
+    // Modèle TRES : Col0=Date|Col1=Entrée|Col2=Sortie|Col3=Nature|Col4=Libellé|Col5=Montant(auto)|Col6=Pièce|Col7=Saisi par
+    const rawTres = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
+    const data = rawTres.slice(5).filter(r => {
+      const d = String(r[0]||'').trim();
+      return d !== '' && !d.toUpperCase().includes('DATE') && !d.toUpperCase().includes('TOTAL');
+    }).map(r => ({
+      date:    r[0],
+      entree:  Math.abs(parseFloat(String(r[1]).replace(/\s/g,'').replace(',','.'))||0),
+      sortie:  Math.abs(parseFloat(String(r[2]).replace(/\s/g,'').replace(',','.'))||0),
+      nature:  String(r[3]||'').trim(),
+      libelle: String(r[4]||'').trim(),
+      piece:   String(r[6]||'').trim(),
+      saisi:   String(r[7]||'').trim(),
+    }));
 
     let importes = 0, erreurs = [];
 
