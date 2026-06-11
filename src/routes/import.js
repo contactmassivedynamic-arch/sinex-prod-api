@@ -145,57 +145,95 @@ router.post('/stocks', auth, upload.single('fichier'), async (req, res) => {
     if (!req.file) return res.status(400).json({ message: 'Fichier manquant' });
     const wb = XLSX.read(req.file.buffer, { type:'buffer', cellDates:true });
 
-    // Feuilles à traiter
-    const sheets = ['Entrees_Stock','Sorties_Stock'];
+    // Feuilles modèle STK_SINEX : CLASSE_1_Consommables | CLASSE_2_EPI_Pieces
+    // Colonnes : N°|Code|Désignation|Unité|Prix|StockDébut|Sorties|Entrées|SoldeFin|ValeurHT
+    const sheets = wb.SheetNames.filter(n =>
+      n.toUpperCase().includes('CLASSE') ||
+      n.toUpperCase().includes('CONSOMMABLE') ||
+      n.toUpperCase().includes('EPI') ||
+      n.toUpperCase().includes('PIECE')
+    );
+
+    if (sheets.length === 0) {
+      return res.status(400).json({ message: 'Aucune feuille CLASSE_1 ou CLASSE_2 trouvée. Vérifiez le modèle STK_SINEX_SA.xlsx' });
+    }
+
+    const mois = req.body.mois || new Date().toISOString().slice(0,7);
+    const dateMois = new Date(mois + '-01');
     let importes = 0, erreurs = [];
 
     for (const sheetName of sheets) {
       const ws = wb.Sheets[sheetName];
       if (!ws) continue;
-      const isSortie = sheetName.toLowerCase().includes('sort');
-      const rawStk = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
-      // Modèle STK : Col0=N°|Col1=Code|Col2=Désignation|Col3=Unité|Col4=Prix|Col5=StockDébut|Col6=Sorties|Col7=Entrées|Col8=SoldeFin
-      const data = rawStk.slice(5).filter(r => {
+      const classe = sheetName.includes('1') || sheetName.toUpperCase().includes('CONSOMMABLE') ? 1 : 2;
+
+      const rawRows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
+      // Sauter les 4 premières lignes (titre, sous-titre, note, vide) + ligne en-têtes (ligne 5)
+      const dataRows = rawRows.slice(5).filter(r => {
         const code = String(r[1]||'').trim();
-        return code !== '' && !code.toUpperCase().includes('CODE') && !code.toUpperCase().includes('TOTAL');
-      }).map(r => ({
-        code: String(r[1]||'').trim().toUpperCase(),
-        libelle: String(r[2]||'').trim(),
-        unite: String(r[3]||'pièce').trim(),
-        prix: Math.abs(parseFloat(r[4])||0),
-        stock_debut: Math.abs(parseFloat(r[5])||0),
-        sorties: Math.abs(parseFloat(r[6])||0),
-        entrees: Math.abs(parseFloat(r[7])||0),
-      }));
+        return code !== '' &&
+               !code.toUpperCase().includes('CODE') &&
+               !code.toUpperCase().includes('TOTAL') &&
+               !code.toUpperCase().includes('N°');
+      });
 
-      for (const row of data) {
-        const code = String(row['Code article']||row['Code']||'').trim();
-        const libelle = String(row['Désignation article']||row['Désignation']||row['Article']||'').trim();
-        if (!code && !libelle) continue;
-        const premVal = String(code||libelle).toUpperCase();
-        if (premVal.includes('TOTAL') || premVal.includes('CODE')) continue;
+      console.log(`[IMPORT STK] Feuille ${sheetName} — ${dataRows.length} lignes trouvées`);
 
-        const qte  = num(row['Quantité entrée']||row['Quantité sortie']||row['Quantité']||row['Quantite']||0);
-        if (!qte) continue;
+      for (const row of dataRows) {
+        const code    = String(row[1]||'').trim().toUpperCase();
+        const libelle = String(row[2]||'').trim();
+        const unite   = String(row[3]||'pièce').trim();
+        const prix    = Math.abs(parseFloat(String(row[4]||'0').replace(',','.'))||0);
+        const stockDebut = Math.abs(parseFloat(String(row[5]||'0').replace(',','.'))||0);
+        const sorties    = Math.abs(parseFloat(String(row[6]||'0').replace(',','.'))||0);
+        const entrees    = Math.abs(parseFloat(String(row[7]||'0').replace(',','.'))||0);
 
-        const dateVal = row['Date entrée']||row['Date sortie']||row['Date'];
-        const date = parseDate(dateVal) || new Date();
-        const motif  = String(row['Fournisseur / Motif']||row['Motif sortie']||row['Motif']||'Import Excel').trim();
+        if (!code || !libelle) { erreurs.push(`Ligne ignorée: code ou libellé vide`); continue; }
+        if (stockDebut===0 && sorties===0 && entrees===0) continue; // ligne vide
 
         try {
+          // Upsert article
           const { rows: art } = await pool.query(
-            `SELECT id FROM stocks_articles WHERE code=$1 OR LOWER(libelle)=LOWER($2) LIMIT 1`,
-            [code, libelle]
+            `INSERT INTO stocks_articles (code, libelle, unite, classe, prix_unitaire_ht, actif)
+             VALUES ($1,$2,$3,$4,$5,true)
+             ON CONFLICT (code) DO UPDATE SET
+               libelle=$2, unite=$3,
+               prix_unitaire_ht=CASE WHEN $5>0 THEN $5 ELSE stocks_articles.prix_unitaire_ht END,
+               actif=true
+             RETURNING id`,
+            [code, libelle, unite, classe, prix]
           );
-          if (!art[0]) { erreurs.push(`Article introuvable: ${code||libelle}`); continue; }
+          const artId = art[0].id;
 
-          await pool.query(
-            `INSERT INTO stocks_mouvements (article_id, type_mouvement, quantite, date_mouvement, motif, saisi_par_id)
-             VALUES ($1,$2,$3,$4,$5,$6)`,
-            [art[0].id, isSortie?'sortie':'entree', qte, date, motif, req.user.id]
-          );
+          // Stock début = report mois précédent (entrée spéciale)
+          if (stockDebut > 0) {
+            await pool.query(
+              `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+               VALUES ($1,'entree',$2,$3,'Report solde mois précédent',$4)`,
+              [artId, stockDebut, dateMois, req.user.id]
+            );
+          }
+          // Sorties du mois
+          if (sorties > 0) {
+            await pool.query(
+              `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+               VALUES ($1,'sortie',$2,$3,'Sortie du mois',$4)`,
+              [artId, sorties, dateMois, req.user.id]
+            );
+          }
+          // Entrées du mois
+          if (entrees > 0) {
+            await pool.query(
+              `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+               VALUES ($1,'entree',$2,$3,'Entrée du mois',$4)`,
+              [artId, entrees, dateMois, req.user.id]
+            );
+          }
           importes++;
-        } catch(e) { erreurs.push(`${code||libelle}: ${e.message}`); }
+        } catch(e) {
+          erreurs.push(`${code}: ${e.message}`);
+          console.error('[IMPORT STK]', code, e.message);
+        }
       }
     }
 
