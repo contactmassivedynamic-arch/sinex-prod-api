@@ -5,34 +5,52 @@ const role   = require('../middleware/role');
 
 const DG = 'directeur_general';
 
-// GET /api/stocks/soldes
+// GET /api/stocks/soldes?mois=YYYY-MM
 router.get('/soldes', auth, async (req, res) => {
   try {
+    const { mois } = req.query;
+    const params = [];
+    let moisFilter = '';
+    if (mois) { params.push(mois); moisFilter = `AND TO_CHAR(sm.date_mouvement,'YYYY-MM')=$${params.length}`; }
+
     const {rows} = await pool.query(`
-      SELECT sa.id, sa.code, sa.libelle, sa.unite, sa.classe,
+      SELECT
+        sa.id, sa.code, sa.libelle, sa.unite, sa.classe,
         sa.seuil_alerte, sa.prix_unitaire_ht,
+        -- Stock actuel (tous mouvements confondus)
         COALESCE(SUM(
-          CASE WHEN sm.type_mouvement='entree' THEN sm.quantite
-               WHEN sm.type_mouvement='sortie' THEN -sm.quantite
-               ELSE 0 END
-        ),0) AS stock_actuel,
-        COALESCE(SUM(
-          CASE WHEN sm.type_mouvement='entree' THEN sm.quantite
-               WHEN sm.type_mouvement='sortie' THEN -sm.quantite
-               ELSE 0 END
-        ),0) * sa.prix_unitaire_ht AS valeur_stock_ht,
-        CASE WHEN COALESCE(SUM(
           CASE WHEN sm.type_mouvement='entree' THEN sm.quantite
                WHEN sm.type_mouvement='sortie' THEN -sm.quantite ELSE 0 END
-        ),0) <= 0 THEN true ELSE false END AS alerte_stock
+        ),0) AS stock_actuel,
+        -- Stock début mois (report mois précédent)
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree' AND sm.motif='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END
+        ),0) AS stock_debut,
+        -- Sorties du mois
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END
+        ),0) AS sorties_mois,
+        -- Entrées du mois (hors report)
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree' AND sm.motif!='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END
+        ),0) AS entrees_mois,
+        -- Solde fin = début + entrées - sorties
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree' ${moisFilter} THEN sm.quantite
+               WHEN sm.type_mouvement='sortie' ${moisFilter} THEN -sm.quantite ELSE 0 END
+        ),0) AS solde_fin,
+        COALESCE(SUM(
+          CASE WHEN sm.type_mouvement='entree' THEN sm.quantite
+               WHEN sm.type_mouvement='sortie' THEN -sm.quantite ELSE 0 END
+        ),0) * sa.prix_unitaire_ht AS valeur_stock_ht
       FROM stocks_articles sa
       LEFT JOIN stocks_mouvements sm ON sm.article_id=sa.id
       WHERE sa.actif=true
       GROUP BY sa.id, sa.code, sa.libelle, sa.unite, sa.classe, sa.seuil_alerte, sa.prix_unitaire_ht
       ORDER BY sa.classe, sa.libelle
-    `);
+    `, params);
     res.json(rows);
-  } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
+  } catch(err) { console.error('[SOLDES]',err.message); res.status(500).json({message:err.message}); }
 });
 
 // GET /api/stocks/alertes
