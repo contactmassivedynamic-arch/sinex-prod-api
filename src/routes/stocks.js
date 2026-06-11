@@ -155,4 +155,19 @@ router.put('/articles/:id/prix', auth, role(DG), async (req, res) => {
   } catch(err) { res.status(500).json({message:err.message}); }
 });
 
+// DELETE /api/stocks/mouvements/effacer — effacer tous les mouvements (DG)
+router.delete('/mouvements/effacer', auth, role(DG), async (req, res) => {
+  try {
+    const { mois } = req.query;
+    let q = 'DELETE FROM stocks_mouvements';
+    const params = [];
+    if (mois) {
+      q += ` WHERE TO_CHAR(date_mouvement,'YYYY-MM')=$1`;
+      params.push(mois);
+    }
+    const r = await pool.query(q, params);
+    res.json({message:`${r.rowCount} mouvement(s) de stock supprimé(s) ✓`});
+  } catch(err) { res.status(500).json({message:err.message}); }
+});
+
 module.exports = router;

@@ -1,313 +1,276 @@
-const router  = require('express').Router();
-const multer  = require('multer');
-const XLSX    = require('xlsx');
-const pool    = require('../db/pool');
-const auth    = require('../middleware/auth');
+const router   = require('express').Router();
+const pool     = require('../db/pool');
+const auth     = require('../middleware/auth');
+const role     = require('../middleware/role');
+const multer   = require('multer');
+const XLSX     = require('xlsx');
+const path     = require('path');
 
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
+const DG  = 'directeur_general';
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10*1024*1024 } });
 
-// Convertir date Excel (numérique ou string) en objet Date
-function parseDate(val) {
-  if (!val) return null;
-  // Numérique Excel (ex: 46012)
-  if (typeof val === 'number') {
-    const d = XLSX.SSF.parse_date_code(val);
-    if (d) return new Date(d.y, d.m-1, d.d);
+function strDate(v) {
+  if (!v) return new Date();
+  if (typeof v === 'number') {
+    const d = new Date(Math.round((v-25569)*86400*1000));
+    return isNaN(d)?new Date():d;
   }
-  // String JJ/MM/AAAA ou AAAA-MM-JJ
-  if (typeof val === 'string') {
-    const fr = val.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (fr) return new Date(parseInt(fr[3]), parseInt(fr[2])-1, parseInt(fr[1]));
-    const iso = val.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (iso) return new Date(parseInt(iso[1]), parseInt(iso[2])-1, parseInt(iso[3]));
-    const d = new Date(val);
-    if (!isNaN(d)) return d;
-  }
-  if (val instanceof Date) return val;
-  return null;
+  const d = new Date(v);
+  return isNaN(d)?new Date():d;
 }
 
-function num(val) { return parseFloat(String(val||'0').replace(/\s/g,'').replace(',','.')) || 0; }
+function numVal(v) { return Math.abs(parseFloat(v)||0); }
 
-// POST /api/import/excel — import production
-router.post('/production', auth, upload.single('fichier'), async (req, res) => {
-  const client = await pool.connect();
+// ══ IMPORT PRODUCTION ══════════════════════════════════════════════
+// Feuille attendue : SAISIE_JOURNALIERE
+// Colonnes : Date|C12|C24|F615|F605|F61|HILIO|Préf32|Préf17|Bouch|CtnC12|CtnC24|Sachets|Étiq|TotalRebuts|JoursOuvrés
+router.post('/production', auth, role(DG), upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: 'Fichier manquant' });
-    const wb = XLSX.read(req.file.buffer, { type:'buffer', cellDates:true });
+    if (!req.file) return res.status(400).json({message:'Fichier manquant'});
+    const wb = XLSX.read(req.file.buffer, {type:'buffer',cellDates:true});
 
-    // Chercher la feuille "Saisie_Journaliere" ou prendre la 1ère
-    const sheetName = wb.SheetNames.find(n=>n.toLowerCase().includes('saisie')||n.toLowerCase().includes('production')) || wb.SheetNames[0];
-    const ws = wb.Sheets[sheetName];
+    // Chercher la feuille SAISIE_JOURNALIERE
+    const ws = wb.Sheets['SAISIE_JOURNALIERE'] || wb.Sheets[wb.SheetNames.find(n=>n.toUpperCase().includes('SAISIE')||n.toUpperCase().includes('PROD'))];
+    if (!ws) return res.status(400).json({message:'Feuille SAISIE_JOURNALIERE introuvable'});
 
-    // Lire à partir de la ligne 8 (après entêtes)
-    const data = XLSX.utils.sheet_to_json(ws, { defval:'', range:6 });
+    const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    let inserted=0, skipped=0;
 
-    await client.query('BEGIN');
-    let importes = 0, erreurs = [];
+    for (let i=0; i<rows.length; i++) {
+      const row = rows[i];
+      if (!row[0] || String(row[0]).trim()==='' || String(row[0]).toUpperCase().includes('DATE') || String(row[0]).toUpperCase().includes('TOTAL')) continue;
 
-    for (const row of data) {
-      // Colonnes du modèle SINEX SA
-      const dateVal = row['Date production'] || row['Date'] || row['DATE'];
-      const date = parseDate(dateVal);
-      if (!date || isNaN(date.getTime())) continue;
+      const dateVal = strDate(row[0]);
+      const c12   = parseInt(row[1])||0;
+      const c24   = parseInt(row[2])||0;
+      const f615  = parseInt(row[3])||0;
+      const f605  = parseInt(row[4])||0;
+      const f61   = parseInt(row[5])||0;
+      const hilio = parseInt(row[6])||0;
+      const pref32  = parseInt(row[7])||0;
+      const pref17  = parseInt(row[8])||0;
+      const bouchons= parseInt(row[9])||0;
+      const ctn_c12 = parseInt(row[10])||0;
+      const ctn_c24 = parseInt(row[11])||0;
+      const hilio_r = parseInt(row[12])||0;
+      const etiq    = parseInt(row[13])||0;
+      const jours   = parseFloat(row[15])||1;
 
-      // Ignorer la ligne TOTAL
-      const premVal = String(dateVal||'').toUpperCase();
-      if (premVal.includes('TOTAL') || premVal.includes('MOIS')) continue;
+      if (c12===0&&c24===0&&f615===0&&f605===0&&f61===0&&hilio===0) { skipped++; continue; }
 
-      const jours  = num(row['Jours ouvrés'] || row['Jours'] || row['JOURS'] || 1);
-      const c12    = num(row['C12 (cartons)']  || row['C12']  || 0);
-      const c24    = num(row['C24 (cartons)']  || row['C24']  || 0);
-      const f615   = num(row['F6/1,5L (fardeaux)'] || row['F6/1,5L'] || row['F615'] || 0);
-      const f605   = num(row['F6/0,5L (fardeaux)'] || row['F6/0,5L'] || row['F605'] || 0);
-      const f61    = num(row['F6/1L (fardeaux)']   || row['F6/1L']   || row['F61']  || 0);
-      const hilio  = num(row['HILIO (packs)'] || row['HILIO'] || 0);
-      const p32    = num(row['Reb. Préf.32g']  || row['Reb. Pref.32g']  || row['Rebut Préf.32g'] || 0);
-      const p17    = num(row['Reb. Préf.17g']  || row['Reb. Pref.17g']  || row['Rebut Préf.17g'] || 0);
-      const bouch  = num(row['Reb. Bouchons']  || row['Rebut Bouchons'] || 0);
-      const ctn12  = num(row['Reb. Cartons']   || row['Rebut Cartons']  || 0);
-      const etiq   = num(row['Reb. Étiquettes']|| row['Reb. Etiquettes']|| row['Rebut Étiq.'] || 0);
-
+      const client = await pool.connect();
       try {
-        // Insérer/mettre à jour production_jour
-        const { rows: pjRows } = await client.query(
-          `INSERT INTO productions_jour (date_production, jours_ouvres, saisi_par, statut, remarques)
-           VALUES ($1,$2,$3,'en_attente','Import Excel')
-           ON CONFLICT (date_production) DO UPDATE SET
-             jours_ouvres=EXCLUDED.jours_ouvres, remarques='Import Excel mis à jour'
-           RETURNING id`,
-          [date, jours || 1, req.user.id]
+        await client.query('BEGIN');
+        const { rows: pj } = await client.query(
+          `INSERT INTO productions_jour (date_production,statut,jours_ouvres,saisi_par_id)
+           VALUES ($1,'valide',$2,$3) ON CONFLICT (date_production) DO UPDATE SET statut='valide',jours_ouvres=$2 RETURNING id`,
+          [dateVal, jours, req.user.id]
         );
-        const pjId = pjRows[0].id;
+        const prodId = pj[0].id;
 
-        // Supprimer anciennes lignes
-        await client.query('DELETE FROM lignes_production WHERE production_id=$1', [pjId]);
-        await client.query('DELETE FROM rebuts WHERE production_id=$1', [pjId]);
-
-        // Insérer lignes production
-        const formats = [
-          ['C12', c12], ['C24', c24], ['F615', f615],
-          ['F605', f605], ['F61', f61], ['HILIO', hilio],
-        ];
-        const BTL = {C12:12,C24:24,F615:6,F605:6,F61:6,HILIO:30};
-        for (const [code, qte] of formats) {
-          if (!qte) continue;
-          const { rows: fmtRows } = await client.query(
-            `SELECT id FROM formats_produits WHERE code=$1`, [code]
-          );
-          if (fmtRows[0]) {
-            await client.query(
-              `INSERT INTO lignes_production (production_id, format_id, cartons_produits, bouteilles_total)
-               VALUES ($1,$2,$3,$4)`,
-              [pjId, fmtRows[0].id, qte, qte*(BTL[code]||0)]
-            );
+        const formats = [['C12',c12],['C24',c24],['F615',f615],['F605',f605],['F61',f61],['HILIO',hilio]];
+        for (const [code,qte] of formats) {
+          if (qte>0) {
+            const { rows: fp } = await client.query('SELECT id FROM formats_produits WHERE code=$1',[code]);
+            if (fp[0]) {
+              await client.query(
+                `INSERT INTO lignes_production (production_id,format_id,cartons_produits)
+                 VALUES ($1,$2,$3) ON CONFLICT (production_id,format_id) DO UPDATE SET cartons_produits=$3`,
+                [prodId, fp[0].id, qte]
+              );
+            }
           }
         }
-
-        // Insérer rebuts si présents
-        if (p32||p17||bouch||ctn12||etiq) {
-          await client.query(
-            `INSERT INTO rebuts (production_id,pref32,pref17,bouchons,ctn_c12,ctn_c24,hilio_rebut,etiquettes)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-            [pjId, p32, p17, bouch, ctn12, 0, 0, etiq]
-          );
-        }
-        importes++;
-      } catch(e) {
-        erreurs.push(`Ligne ${date.toLocaleDateString('fr-FR')}: ${e.message}`);
-      }
+        // Rebuts
+        await client.query(
+          `INSERT INTO rebuts (production_id,pref32,pref17,bouchons,ctn_c12,ctn_c24,hilio_rebut,etiquettes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (production_id) DO UPDATE SET pref32=$2,pref17=$3,bouchons=$4,ctn_c12=$5,ctn_c24=$6,hilio_rebut=$7,etiquettes=$8`,
+          [prodId, pref32, pref17, bouchons, ctn_c12, ctn_c24, hilio_r, etiq]
+        );
+        await client.query('COMMIT');
+        inserted++;
+      } catch(e) { await client.query('ROLLBACK'); skipped++; console.error('[IMPORT PROD]',e.message); }
+      finally { client.release(); }
     }
 
-    await client.query('COMMIT');
-
-    // Enregistrer historique
-    await pool.query(
-      `INSERT INTO import_historique (type_import, nom_fichier, lignes_importees, statut, importe_par_id)
-       VALUES ('production',$1,$2,'success',$3)`,
-      [req.file.originalname, importes, req.user.id]
-    ).catch(()=>{});
-
-    res.json({ message:`Import production réussi — ${importes} journée(s) importée(s)`, importes, erreurs });
-  } catch(err) {
-    await client.query('ROLLBACK').catch(()=>{});
-    console.error('[IMPORT PROD]', err.message);
-    res.status(500).json({ message: err.message });
-  } finally { client.release(); }
+    await pool.query(`INSERT INTO import_historique (type_import,nom_fichier,lignes_importees,statut,importe_par_id) VALUES ('production',$1,$2,'success',$3)`,
+      [req.file.originalname, inserted, req.user.id]).catch(()=>{});
+    res.json({message:`Import production terminé ✓ — ${inserted} ligne(s) importée(s), ${skipped} ignorée(s)`, inserted, skipped});
+  } catch(e) { console.error('[IMPORT PROD ERR]',e.message); res.status(500).json({message:e.message}); }
 });
 
-// POST /api/import/stocks
-router.post('/stocks', auth, upload.single('fichier'), async (req, res) => {
+// ══ IMPORT STOCKS ══════════════════════════════════════════════════
+// Feuilles : CLASSE_1_Consommables | CLASSE_2_EPI_Pieces
+// Colonnes : N°|Code|Désignation|Unité|Prix|StockDébut|Sorties|Entrées|SoldeFin|ValeurHT
+router.post('/stocks', auth, role(DG), upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: 'Fichier manquant' });
-    const wb = XLSX.read(req.file.buffer, { type:'buffer', cellDates:true });
+    if (!req.file) return res.status(400).json({message:'Fichier manquant'});
+    const wb = XLSX.read(req.file.buffer, {type:'buffer',cellDates:true});
 
-    // Feuilles à traiter
-    const sheets = ['Entrees_Stock','Sorties_Stock'];
-    let importes = 0, erreurs = [];
+    let inserted=0, skipped=0;
+    const feuilles = wb.SheetNames.filter(n=>n.toUpperCase().includes('CLASSE'));
 
-    for (const sheetName of sheets) {
+    for (const sheetName of feuilles) {
       const ws = wb.Sheets[sheetName];
-      if (!ws) continue;
-      const isSortie = sheetName.toLowerCase().includes('sort');
-      const data = XLSX.utils.sheet_to_json(ws, { defval:'', range:6 });
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+      const classe = sheetName.includes('1')?1:2;
 
-      for (const row of data) {
-        const code = String(row['Code article']||row['Code']||'').trim();
-        const libelle = String(row['Désignation article']||row['Désignation']||row['Article']||'').trim();
-        if (!code && !libelle) continue;
-        const premVal = String(code||libelle).toUpperCase();
-        if (premVal.includes('TOTAL') || premVal.includes('CODE')) continue;
+      for (const row of rows) {
+        const code = String(row[1]||'').trim().toUpperCase();
+        if (!code || code==='CODE' || code==='N°' || code==='' || code==='TOTAL') continue;
 
-        const qte  = num(row['Quantité entrée']||row['Quantité sortie']||row['Quantité']||row['Quantite']||0);
-        if (!qte) continue;
+        const libelle = String(row[2]||'').trim();
+        const unite   = String(row[3]||'pièce').trim();
+        const prix    = numVal(row[4]);
+        const stock_debut = numVal(row[5]);
+        const sorties     = numVal(row[6]);
+        const entrees     = numVal(row[7]);
+        const solde_fin   = numVal(row[8]);
 
-        const dateVal = row['Date entrée']||row['Date sortie']||row['Date'];
-        const date = parseDate(dateVal) || new Date();
-        const motif  = String(row['Fournisseur / Motif']||row['Motif sortie']||row['Motif']||'Import Excel').trim();
+        if (!libelle) { skipped++; continue; }
 
+        const mois = req.body.mois || new Date().toISOString().slice(0,7);
+        const date_mvt = new Date(mois+'-01');
+
+        const client = await pool.connect();
         try {
-          const { rows: art } = await pool.query(
-            `SELECT id FROM stocks_articles WHERE code=$1 OR LOWER(libelle)=LOWER($2) LIMIT 1`,
-            [code, libelle]
+          await client.query('BEGIN');
+          // Upsert article
+          const { rows: art } = await client.query(
+            `INSERT INTO stocks_articles (code,libelle,unite,classe,prix_unitaire_ht,actif)
+             VALUES ($1,$2,$3,$4,$5,true)
+             ON CONFLICT (code) DO UPDATE SET libelle=$2,unite=$3,prix_unitaire_ht=CASE WHEN $5>0 THEN $5 ELSE stocks_articles.prix_unitaire_ht END,actif=true
+             RETURNING id`,
+            [code, libelle, unite, classe, prix]
           );
-          if (!art[0]) { erreurs.push(`Article introuvable: ${code||libelle}`); continue; }
+          const artId = art[0].id;
 
-          await pool.query(
-            `INSERT INTO stocks_mouvements (article_id, type_mouvement, quantite, date_mouvement, motif, saisi_par_id)
-             VALUES ($1,$2,$3,$4,$5,$6)`,
-            [art[0].id, isSortie?'sortie':'entree', qte, date, motif, req.user.id]
-          );
-          importes++;
-        } catch(e) { erreurs.push(`${code||libelle}: ${e.message}`); }
+          // Mouvement stock début (report)
+          if (stock_debut > 0) {
+            await client.query(
+              `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+               VALUES ($1,'entree',$2,$3,'Report solde mois précédent',$4)`,
+              [artId, stock_debut, date_mvt, req.user.id]
+            );
+          }
+          // Sorties
+          if (sorties > 0) {
+            await client.query(
+              `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+               VALUES ($1,'sortie',$2,$3,'Sortie du mois',$4)`,
+              [artId, sorties, date_mvt, req.user.id]
+            );
+          }
+          // Entrées
+          if (entrees > 0) {
+            await client.query(
+              `INSERT INTO stocks_mouvements (article_id,type_mouvement,quantite,date_mouvement,motif,saisi_par_id)
+               VALUES ($1,'entree',$2,$3,'Entrée du mois',$4)`,
+              [artId, entrees, date_mvt, req.user.id]
+            );
+          }
+          await client.query('COMMIT');
+          inserted++;
+        } catch(e) { await client.query('ROLLBACK'); skipped++; console.error('[IMPORT STKS]',code,e.message); }
+        finally { client.release(); }
       }
     }
 
-    await pool.query(
-      `INSERT INTO import_historique (type_import, nom_fichier, lignes_importees, statut, importe_par_id)
-       VALUES ('stocks',$1,$2,'success',$3)`,
-      [req.file.originalname, importes, req.user.id]
-    ).catch(()=>{});
-
-    res.json({ message:`Import stocks réussi — ${importes} mouvement(s) importé(s)`, importes, erreurs });
-  } catch(err) {
-    console.error('[IMPORT STK]', err.message);
-    res.status(500).json({ message: err.message });
-  }
+    await pool.query(`INSERT INTO import_historique (type_import,nom_fichier,lignes_importees,statut,importe_par_id) VALUES ('stocks',$1,$2,'success',$3)`,
+      [req.file.originalname, inserted, req.user.id]).catch(()=>{});
+    res.json({message:`Import stocks terminé ✓ — ${inserted} article(s) traité(s), ${skipped} ignoré(s)`, inserted, skipped});
+  } catch(e) { console.error('[IMPORT STKS ERR]',e.message); res.status(500).json({message:e.message}); }
 });
 
-// POST /api/import/tresorerie
-router.post('/tresorerie', auth, upload.single('fichier'), async (req, res) => {
+// ══ IMPORT TRÉSORERIE ══════════════════════════════════════════════
+// Feuilles : CAISSE_DEF | BSIC_TOGO | BOA_TOGO | BATG_TOGO
+// Colonnes : Date | Entrée | Sortie | Nature | Libellé | Montant(auto) | Pièce just. | Saisi par
+router.post('/tresorerie', auth, role(DG), upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: 'Fichier manquant' });
-    const wb = XLSX.read(req.file.buffer, { type:'buffer', cellDates:true });
+    if (!req.file) return res.status(400).json({message:'Fichier manquant'});
+    const wb = XLSX.read(req.file.buffer, {type:'buffer',cellDates:true});
 
-    const sheetName = wb.SheetNames.find(n=>n.toLowerCase().includes('brouillard')) || wb.SheetNames[0];
-    const ws = wb.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(ws, { defval:'', range:6 });
+    const CODES_COMPTES = ['CAISSE_DEF','BSIC_TOGO','BOA_TOGO','BATG_TOGO'];
+    let inserted=0, skipped=0;
 
-    let importes = 0, erreurs = [];
+    for (const code of CODES_COMPTES) {
+      const ws = wb.Sheets[code];
+      if (!ws) continue;
 
-    for (const row of data) {
-      const compteNom = String(row['Compte']||'').trim();
-      const libelle   = String(row['Libellé']||row['Libelle']||'').trim();
-      const sensRaw   = String(row['Sens']||row['SENS']||'').trim().toUpperCase();
-      if (!compteNom || !sensRaw) continue;
-      if (compteNom.toUpperCase().includes('TOTAL') || compteNom.toUpperCase().includes('SOLDE')) continue;
+      // Trouver le compte en DB
+      const { rows: comptes } = await pool.query('SELECT id FROM comptes_tresorerie WHERE code=$1',[code]);
+      if (!comptes[0]) { console.warn('[IMPORT TRES] Compte non trouvé:',code); continue; }
+      const compteId = comptes[0].id;
 
-      const montant = num(row['Montant (FCFA)']||row['Montant']||0);
-      if (!montant) continue;
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
 
-      const sens  = sensRaw === 'ENTREE' || sensRaw === 'CRÉDIT' || sensRaw === 'CREDIT' ? 'credit' : 'debit';
-      const dateVal = row['Date'];
-      const date  = parseDate(dateVal) || new Date();
-      const nature = String(row['Nature opération']||row['Nature']||'import_excel').trim();
+      for (const row of rows) {
+        // Ignorer les lignes sans date ou qui sont des en-têtes/totaux
+        const dateRaw = row[0];
+        if (!dateRaw || String(dateRaw).toUpperCase().includes('DATE') || String(dateRaw).toUpperCase().includes('TOTAL')) continue;
 
-      try {
-        // Chercher le compte par code ou libelle
-        // Mapping codes modèle → codes réels base
-        const mappingComptes = {
-          'CAISSE_DEFALE': 'CAISSE_DEF',
-          'CAISSE_DIVERS': 'CAISSE_LOM',
-          'BOA_TOGO':      'BOA_TOGO',
-          'BSIC_TOGO':     'BSIC_TOGO',
-          'BATG_TOGO':     'BATG_TOGO',
-        };
-        const codeReel = mappingComptes[compteNom] || compteNom;
-        const { rows: cpt } = await pool.query(
-          `SELECT id FROM comptes_tresorerie
-           WHERE code=$1 OR code ILIKE $2 OR libelle ILIKE $2 LIMIT 1`,
-          [codeReel, `%${compteNom.replace('_',' ')}%`]
-        );
-        if (!cpt[0]) { erreurs.push(`Compte introuvable: ${compteNom}`); continue; }
+        const entree  = numVal(row[1]);
+        const sortie  = numVal(row[2]);
+        const nature  = String(row[3]||'').trim();
+        const libelle = String(row[4]||'').trim();
+        const piece   = String(row[6]||'').trim();
+        const saisi   = String(row[7]||'').trim();
 
-        await pool.query(
-          `INSERT INTO tresorerie_mouvements (compte_id, sens, montant_fcfa, date_mouvement, description, type_operation, saisi_par_id)
-           VALUES ($1,$2,$3,$4,$5,'import_excel',$6)`,
-          [cpt[0].id, sens, montant, date, libelle||'Import Excel', req.user.id]
-        );
-        importes++;
-      } catch(e) { erreurs.push(`${compteNom}: ${e.message}`); }
-    }
+        // Il faut au moins une valeur (entrée ou sortie)
+        if (entree===0 && sortie===0) { skipped++; continue; }
+        if (!libelle && !nature) { skipped++; continue; }
 
-    // Feuille crédits si présente
-    const wsCredits = wb.Sheets['Gestion_Credits'];
-    if (wsCredits) {
-      const credData = XLSX.utils.sheet_to_json(wsCredits, { defval:'', range:6 });
-      for (const row of credData) {
-        const libelle = String(row['Libellé']||row['Libelle']||'').trim();
-        const cat     = String(row['Catégorie']||row['Categorie']||'autre_credit').trim();
-        const montant = num(row['Montant (FCFA)']||0);
-        if (!libelle || !montant) continue;
-        if (libelle.toUpperCase().includes('TOTAL')) continue;
-
-        const benef   = String(row['Bénéficiaire']||'').trim();
-        const dateVal = row['Date crédit']||row['Date'];
-        const dateC   = parseDate(dateVal) || new Date();
-        const dateE   = parseDate(row['Date échéance']||row['Date echeance']);
+        const sens    = entree > 0 ? 'credit' : 'debit';
+        const montant = entree > 0 ? entree : sortie;
+        const dateVal = strDate(dateRaw);
 
         try {
           await pool.query(
-            `INSERT INTO credits (categorie, libelle, montant_fcfa, date_credit, date_echeance, beneficiaire, saisi_par_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-            [cat, libelle, montant, dateC, dateE||null, benef, req.user.id]
+            `INSERT INTO tresorerie_mouvements
+               (compte_id,sens,montant_fcfa,date_mouvement,description,nature_operation,piece_justificative,saisi_par_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [compteId, sens, montant, dateVal, libelle||nature, nature, piece, req.user.id]
           );
-          importes++;
-        } catch(e) { erreurs.push(`Crédit ${libelle}: ${e.message}`); }
+          inserted++;
+        } catch(e) { skipped++; console.error('[IMPORT TRES]',code,e.message); }
       }
     }
 
-    await pool.query(
-      `INSERT INTO import_historique (type_import, nom_fichier, lignes_importees, statut, importe_par_id)
-       VALUES ('tresorerie',$1,$2,'success',$3)`,
-      [req.file.originalname, importes, req.user.id]
-    ).catch(()=>{});
+    // Import crédits si feuille CREDITS présente
+    const ws_cr = wb.Sheets['CREDITS'];
+    let inserted_cr=0;
+    if (ws_cr) {
+      const rows_cr = XLSX.utils.sheet_to_json(ws_cr, {header:1, defval:''});
+      for (const row of rows_cr) {
+        const date_c = row[0]; const creancier=String(row[2]||'').trim(); const nature_c=String(row[3]||'').trim();
+        const emprunte=numVal(row[4]); const rembourse=numVal(row[5]);
+        if (!creancier||creancier==='Créancier / Banque'||emprunte===0) continue;
+        try {
+          await pool.query(
+            `INSERT INTO credits (creancier,nature_credit,montant_fcfa,montant_rembourse,date_contrat,statut,saisi_par_id)
+             VALUES ($1,$2,$3,$4,$5,'actif',$6) ON CONFLICT DO NOTHING`,
+            [creancier, nature_c, emprunte, rembourse, strDate(date_c), req.user.id]
+          );
+          inserted_cr++;
+        } catch(e) { console.error('[IMPORT CR]',e.message); }
+      }
+    }
 
-    res.json({ message:`Import trésorerie réussi — ${importes} ligne(s) importée(s)`, importes, erreurs });
-  } catch(err) {
-    console.error('[IMPORT TRES]', err.message);
-    res.status(500).json({ message: err.message });
-  }
+    await pool.query(`INSERT INTO import_historique (type_import,nom_fichier,lignes_importees,statut,importe_par_id) VALUES ('tresorerie',$1,$2,'success',$3)`,
+      [req.file.originalname, inserted+inserted_cr, req.user.id]).catch(()=>{});
+    res.json({message:`Import trésorerie terminé ✓ — ${inserted} mouvement(s) + ${inserted_cr} crédit(s), ${skipped} ignoré(s)`, inserted, inserted_cr, skipped});
+  } catch(e) { console.error('[IMPORT TRES ERR]',e.message); res.status(500).json({message:e.message}); }
 });
 
-// GET /api/import/historique
+// GET historique imports
 router.get('/historique', auth, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT h.*, u.nom_complet AS importe_par_nom
-       FROM import_historique h
-       LEFT JOIN utilisateurs u ON u.id=h.importe_par_id
-       ORDER BY h.created_at DESC LIMIT 50`
-    ).catch(()=>({rows:[]}));
+      `SELECT ih.*,u.nom_complet AS importe_par_nom FROM import_historique ih
+       LEFT JOIN utilisateurs u ON u.id=ih.importe_par_id ORDER BY ih.created_at DESC LIMIT 50`
+    );
     res.json(rows);
-  } catch { res.json([]); }
-});
-
-// Route ancienne compatibilité
-router.post('/excel', auth, upload.single('fichier'), async (req, res) => {
-  const type = req.body?.type;
-  if (type === 'production') return router.handle({...req, url:'/production'}, res, ()=>{});
-  res.status(400).json({ message: 'Utilisez /api/import/production, /api/import/stocks ou /api/import/tresorerie' });
+  } catch(e) { res.status(500).json({message:e.message}); }
 });
 
 module.exports = router;
