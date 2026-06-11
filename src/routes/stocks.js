@@ -64,6 +64,44 @@ router.get('/alertes', auth, async (req, res) => {
   } catch(err) { res.status(500).json({message:'Erreur serveur'}); }
 });
 
+// GET /api/stocks/mouvements/resume — vue agrégée par article (comme le fichier Excel)
+router.get('/mouvements/resume', auth, async (req, res) => {
+  try {
+    const {mois, classe} = req.query;
+    const params = [];
+    let whereClause = 'WHERE sa.actif=true';
+    if (classe && classe!=='all') { params.push(parseInt(classe)); whereClause += ` AND sa.classe=$${params.length}`; }
+
+    // Construire filtre mois pour les mouvements
+    let moisFilter = '';
+    if (mois) { params.push(mois); moisFilter = `AND TO_CHAR(sm.date_mouvement,'YYYY-MM')=$${params.length}`; }
+
+    const q = `
+      SELECT
+        ROW_NUMBER() OVER (ORDER BY sa.classe, sa.libelle) AS num,
+        sa.code,
+        sa.libelle,
+        sa.unite,
+        sa.prix_unitaire_ht AS prix_ht,
+        sa.classe,
+        COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' AND sm.motif='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS stock_debut,
+        COALESCE(SUM(CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS sorties,
+        COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' AND sm.motif!='Report solde mois précédent' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS entrees,
+        COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' ${moisFilter} THEN sm.quantite ELSE 0 END),0) -
+        COALESCE(SUM(CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END),0) AS solde_fin,
+        (COALESCE(SUM(CASE WHEN sm.type_mouvement='entree' ${moisFilter} THEN sm.quantite ELSE 0 END),0) -
+         COALESCE(SUM(CASE WHEN sm.type_mouvement='sortie' ${moisFilter} THEN sm.quantite ELSE 0 END),0)) * sa.prix_unitaire_ht AS valeur_ht
+      FROM stocks_articles sa
+      LEFT JOIN stocks_mouvements sm ON sm.article_id=sa.id
+      ${whereClause}
+      GROUP BY sa.id, sa.code, sa.libelle, sa.unite, sa.prix_unitaire_ht, sa.classe
+      ORDER BY sa.classe, sa.libelle
+    `;
+    const {rows} = await pool.query(q, params);
+    res.json(rows);
+  } catch(err) { console.error('[STOCKS RESUME]',err.message); res.status(500).json({message:err.message}); }
+});
+
 // GET /api/stocks/mouvements — avec filtres mois + type + classe
 router.get('/mouvements', auth, async (req, res) => {
   try {
@@ -152,21 +190,6 @@ router.put('/articles/:id/prix', auth, role(DG), async (req, res) => {
       [prix_unitaire_ht, req.params.id]
     );
     res.json({message:'Prix mis à jour ✓'});
-  } catch(err) { res.status(500).json({message:err.message}); }
-});
-
-// DELETE /api/stocks/mouvements/effacer — effacer tous les mouvements (DG)
-router.delete('/mouvements/effacer', auth, role(DG), async (req, res) => {
-  try {
-    const { mois } = req.query;
-    let q = 'DELETE FROM stocks_mouvements';
-    const params = [];
-    if (mois) {
-      q += ` WHERE TO_CHAR(date_mouvement,'YYYY-MM')=$1`;
-      params.push(mois);
-    }
-    const r = await pool.query(q, params);
-    res.json({message:`${r.rowCount} mouvement(s) de stock supprimé(s) ✓`});
   } catch(err) { res.status(500).json({message:err.message}); }
 });
 
