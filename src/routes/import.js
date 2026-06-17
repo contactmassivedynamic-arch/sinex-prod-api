@@ -84,7 +84,7 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
 
       try {
         const {rows: pj} = await client.query(
-          `INSERT INTO productions_jour (date_production,jours_ouvres,saisi_par_id,statut)
+          `INSERT INTO productions_jour (date_production,jours_ouvres,saisi_par,statut)
            VALUES ($1,$2,$3,'valide')
            ON CONFLICT (date_production) DO UPDATE SET
              jours_ouvres=EXCLUDED.jours_ouvres, statut='valide'
@@ -110,9 +110,9 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
         await client.query('DELETE FROM rebuts WHERE production_id=$1',[pjId]);
         await client.query(
           `INSERT INTO rebuts
-             (production_id,pref32,pref17,bouchons,ctn_c12,ctn_c24,hilio_rebut,etiq_c12,etiq_c24)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [pjId, pref32, pref17, bouchons, ctn_c12, ctn_c24, hilio_r, etiq_c12, etiq_c24]
+             (production_id,pref32,pref17,bouchons,ctn_c12,ctn_c24,hilio_rebut,etiq_c12,etiq_c24,etiquettes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [pjId, pref32, pref17, bouchons, ctn_c12, ctn_c24, hilio_r, etiq_c12, etiq_c24, etiq_c12+etiq_c24]
         );
 
         inserted++;
