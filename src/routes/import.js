@@ -35,7 +35,6 @@ function num(v) { return Math.abs(parseFloat(String(v||'0').replace(/\s/g,'').re
 //      M=12 Sachets HILIO rebuts | N=13 Étiq C12 (1,5L) | O=14 Étiq C24 (0,5L)
 //      P=15 Total rebuts (calculé — ignoré) | Q=16 Jours ouvrés
 router.post('/production', auth, role(DG), upload.single('fichier'), async (req, res) => {
-  const client = await pool.connect();
   try {
     if (!req.file) return res.status(400).json({message:'Fichier manquant'});
     const wb = XLSX.read(req.file.buffer, {type:'buffer', cellDates:true, raw:false});
@@ -55,12 +54,12 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
 
     console.log(`[IMPORT PROD] Feuille: ${sheetName} — ${dataRows.length} lignes`);
 
-    await client.query('BEGIN');
     let inserted=0, skipped=0, erreurs=[];
 
     for (const row of dataRows) {
       const date = parseDate(row[0]);
       if (!date || isNaN(date.getTime())) { skipped++; continue; }
+      const client = await pool.connect();
 
       // Produits finis — cols B à G (index 1-6)
       const c12   = num(row[1]);
@@ -83,15 +82,26 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
       const jours    = parseFloat(row[16])||1; // Q — Jours ouvrés
 
       try {
-        const {rows: pj} = await client.query(
-          `INSERT INTO productions_jour (date_production,jours_ouvres,saisi_par,statut)
-           VALUES ($1,$2,$3,'valide')
-           ON CONFLICT (date_production) DO UPDATE SET
-             jours_ouvres=EXCLUDED.jours_ouvres, statut='valide'
-           RETURNING id`,
-          [date, jours, req.user.id]
+        await client.query('BEGIN');
+        // UPSERT manuel pour éviter le problème de contrainte UNIQUE
+        const {rows: exist} = await client.query(
+          `SELECT id FROM productions_jour WHERE date_production=$1`, [date]
         );
-        const pjId = pj[0].id;
+        let pjId;
+        if (exist[0]) {
+          await client.query(
+            `UPDATE productions_jour SET jours_ouvres=$1, statut='valide' WHERE id=$2`,
+            [jours, exist[0].id]
+          );
+          pjId = exist[0].id;
+        } else {
+          const {rows: pj} = await client.query(
+            `INSERT INTO productions_jour (date_production,jours_ouvres,saisi_par,statut)
+             VALUES ($1,$2,$3,'valide') RETURNING id`,
+            [date, jours, req.user.id]
+          );
+          pjId = pj[0].id;
+        }
 
         // Lignes production — supprimer puis réinsérer
         await client.query('DELETE FROM lignes_production WHERE production_id=$1',[pjId]);
@@ -115,14 +125,15 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
           [pjId, pref32, pref17, bouchons, ctn_c12, ctn_c24, hilio_r, etiq_c12, etiq_c24, etiq_c12+etiq_c24]
         );
 
+        await client.query('COMMIT');
         inserted++;
       } catch(e) {
+        await client.query('ROLLBACK').catch(()=>{});
         erreurs.push(`${date.toLocaleDateString('fr-FR')}: ${e.message}`);
         console.error('[IMPORT PROD ROW]', e.message);
-      }
+      } finally { client.release(); }
     }
 
-    await client.query('COMMIT');
     await pool.query(
       `INSERT INTO import_historique (type_import,nom_fichier,lignes_importees,statut,importe_par_id)
        VALUES ('production',$1,$2,'success',$3)`,
@@ -132,10 +143,9 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
     console.log(`[IMPORT PROD] ✅ ${inserted} journées importées, ${skipped} ignorées`);
     res.json({message:`Import production ✓ — ${inserted} journée(s) importée(s)`, inserted, skipped, erreurs});
   } catch(e) {
-    await client.query('ROLLBACK').catch(()=>{});
     console.error('[IMPORT PROD ERR]', e.message);
     res.status(500).json({message:e.message});
-  } finally { client.release(); }
+  }
 });
 
 // ══ IMPORT STOCKS ══════════════════════════════════════════════════
