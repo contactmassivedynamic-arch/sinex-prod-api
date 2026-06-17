@@ -75,11 +75,14 @@ router.post('/production', auth, role(DG), upload.single('fichier'), async (req,
       const bouchons = num(row[9]);   // J — Bouchons
       const ctn_c12  = num(row[10]);  // K — Cartons C12
       const ctn_c24  = num(row[11]);  // L — Cartons C24
-      const hilio_r  = num(row[12]);  // M — Sachets HILIO (NOUVEAU)
-      const etiq_c12 = num(row[13]);  // N — Étiquettes C12 1,5L (SCINDÉ)
-      const etiq_c24 = num(row[14]);  // O — Étiquettes C24 0,5L (SCINDÉ)
-      // row[15] = Total rebuts auto — ignoré
-      const jours    = parseFloat(row[16])||1; // Q — Jours ouvrés
+      const hilio_r  = num(row[12]);  // M — Sachets HILIO rebuts
+      const etiq_c12 = num(row[13]);  // N — Étiq C12 (1,5L)
+      const etiq_c24 = num(row[14]);  // O — Étiq C24 (0,5L)
+      // row[15] = Total rebuts auto (formule Excel) — ignoré
+      const jours    = parseFloat(row[16])||parseFloat(row[15])||1; // Q Jours ouvrés
+
+      // Log debug pour vérifier chaque ligne
+      console.log(`[IMPORT PROD ROW] ${String(row[0]).slice(0,10)} | M:${hilio_r} N(etiqC12):${etiq_c12} O(etiqC24):${etiq_c24} Q(jours):${jours}`);
 
       try {
         await client.query('BEGIN');
