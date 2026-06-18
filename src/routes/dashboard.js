@@ -5,7 +5,9 @@ const { calcCAHT, calcCDHT, calcMarges, calcCPF } = require('../utils/formules')
 
 router.get('/consolide', auth, async (req, res) => {
   try {
-    const mois = req.query.mois || new Date().toISOString().slice(0,7);
+    const moisRaw = req.query.mois || new Date().toISOString().slice(0,7);
+    // Extraire uniquement YYYY-MM (ignorer le cache-busting &_t=...)
+    const mois = moisRaw.split('&')[0].slice(0,7);
     const annee = mois.slice(0,4);
 
     // KPIs production du mois
@@ -24,22 +26,18 @@ router.get('/consolide', auth, async (req, res) => {
     );
     kpis.jours_ouvres=parseFloat(jr[0]?.jours||0);
 
-    // CA du mois avec vraies formules
     const prods={C12:kpis.c12,C24:kpis.c24,F615:kpis.f615,F605:kpis.f605,F61:kpis.f61,HILIO:kpis.hilio};
     const caMois  = calcCAHT(prods);
     const cdMois  = calcCDHT(prods, {});
     const marges  = calcMarges(caMois, cdMois);
 
-    // CA cumulé annuel
     const {rows:atpAnnee} = await pool.query(
-      `SELECT COALESCE(SUM(real_ca_ht),0) AS ca_cumule,
-              COALESCE(SUM(real_cd_ht),0) AS cd_cumule
+      `SELECT COALESCE(SUM(real_ca_ht),0) AS ca_cumule, COALESCE(SUM(real_cd_ht),0) AS cd_cumule
        FROM atp WHERE periode LIKE $1`, [`${annee}-%`]
     );
     const caCumule = parseFloat(atpAnnee[0]?.ca_cumule||0);
     const cdCumule = parseFloat(atpAnnee[0]?.cd_cumule||0);
 
-    // CI cumulée
     const {rows:ciRows} = await pool.query(
       `SELECT charges_indirectes FROM atp WHERE periode LIKE $1`, [`${annee}-%`]
     );
@@ -50,7 +48,6 @@ router.get('/consolide', auth, async (req, res) => {
 
     const cpf = calcCPF(caCumule, cdCumule, ciCumule);
 
-    // Évolution 6 mois
     const {rows:evoRows} = await pool.query(
       `SELECT TO_CHAR(pj.date_production,'YYYY-MM') AS mois, fp.code, SUM(lp.cartons_produits) AS total
        FROM lignes_production lp
@@ -65,7 +62,7 @@ router.get('/consolide', auth, async (req, res) => {
       if(['c12','c24','hilio'].includes(r.code.toLowerCase())) evoMap[r.mois][r.code.toLowerCase()]=parseInt(r.total);
     });
 
-    // Rebuts du mois
+    // Rebuts — etiq_c12 et etiq_c24 séparées, sans etiquettes
     const {rows:rebutRows} = await pool.query(
       `SELECT 'Préformes' AS nom, COALESCE(SUM(r.pref32+r.pref17),0) AS quantite FROM rebuts r
         JOIN productions_jour p ON p.id=r.production_id WHERE TO_CHAR(p.date_production,'YYYY-MM')=$1 AND p.statut='valide'
@@ -73,18 +70,20 @@ router.get('/consolide', auth, async (req, res) => {
        SELECT 'Bouchons', COALESCE(SUM(r.bouchons),0) FROM rebuts r
         JOIN productions_jour p ON p.id=r.production_id WHERE TO_CHAR(p.date_production,'YYYY-MM')=$1 AND p.statut='valide'
        UNION ALL
-       SELECT 'Étiquettes', COALESCE(SUM(r.etiquettes),0) FROM rebuts r
+       SELECT 'Étiq C12 (1,5L)', COALESCE(SUM(r.etiq_c12),0) FROM rebuts r
+        JOIN productions_jour p ON p.id=r.production_id WHERE TO_CHAR(p.date_production,'YYYY-MM')=$1 AND p.statut='valide'
+       UNION ALL
+       SELECT 'Étiq C24 (0,5L)', COALESCE(SUM(r.etiq_c24),0) FROM rebuts r
         JOIN productions_jour p ON p.id=r.production_id WHERE TO_CHAR(p.date_production,'YYYY-MM')=$1 AND p.statut='valide'
        UNION ALL
        SELECT 'Cartons', COALESCE(SUM(r.ctn_c12+r.ctn_c24),0) FROM rebuts r
         JOIN productions_jour p ON p.id=r.production_id WHERE TO_CHAR(p.date_production,'YYYY-MM')=$1 AND p.statut='valide'
        UNION ALL
-       SELECT 'Film HILIO', COALESCE(SUM(r.hilio_rebut),0) FROM rebuts r
+       SELECT 'Sachets HILIO', COALESCE(SUM(r.hilio_rebut),0) FROM rebuts r
         JOIN productions_jour p ON p.id=r.production_id WHERE TO_CHAR(p.date_production,'YYYY-MM')=$1 AND p.statut='valide'`,
       [mois]
     );
 
-    // ATP du mois pour réalisations
     const {rows:atpRows} = await pool.query(`SELECT * FROM atp WHERE periode=$1`,[mois]);
 
     res.json({
