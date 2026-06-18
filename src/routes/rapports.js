@@ -69,7 +69,7 @@ router.post('/generer', auth, async (req, res) => {
                     hilio_rebut, sachets_hilio,
                     COALESCE(etiq_c12,0) AS etiq_c12,
                     COALESCE(etiq_c24,0) AS etiq_c24,
-                    COALESCE(etiquettes,0) AS etiquettes
+                    COALESCE(etiq_c12,0) AS etiq_c12, COALESCE(etiq_c24,0) AS etiq_c24
              FROM rebuts WHERE production_id = $1`, [pj.id]
           );
           if (rr.rows[0]) {
@@ -83,8 +83,8 @@ router.post('/generer', auth, async (req, res) => {
               hilio_rebut:  parseInt(rb.hilio_rebut)  || 0,
               sachets_hilio:parseInt(rb.sachets_hilio)|| 0,
               // etiq_c12 et etiq_c24 séparées — fallback sur etiquettes si pas encore migrées
-              etiq_c12: parseInt(rb.etiq_c12) || Math.round((parseInt(rb.etiquettes)||0)/2),
-              etiq_c24: parseInt(rb.etiq_c24) || Math.round((parseInt(rb.etiquettes)||0)/2),
+              etiq_c12: parseInt(rb.etiq_c12) || Math.round((parseInt(rb.etiq_c12||0)+parseInt(rb.etiq_c24||0))/2),
+              etiq_c24: parseInt(rb.etiq_c24) || Math.round((parseInt(rb.etiq_c12||0)+parseInt(rb.etiq_c24||0))/2),
             };
           }
         } catch(e) { console.error('[RAPPORT] rebuts:', e.message); }
