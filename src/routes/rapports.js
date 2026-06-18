@@ -51,7 +51,7 @@ router.post('/generer', auth, async (req, res) => {
       for (const pj of pjRows) {
         let prods = {c12:0,c24:0,f615:0,f605:0,f61:0,hilio:0};
         // ⚠ Rebuts avec etiq_c12 et etiq_c24 SÉPARÉES
-        let rebuts = {pref32:0,pref17:0,bouchons:0,ctn_c12:0,ctn_c24:0,hilio_rebut:0,sachets_hilio:0,etiq_c12:0,etiq_c24:0};
+        let rebuts = {pref32:0,pref17:0,bouchons:0,ctn_c12:0,ctn_c24:0,hilio:0,etiq_c12:0,etiq_c24:0};
 
         try {
           const lr = await pool.query(
@@ -66,25 +66,22 @@ router.post('/generer', auth, async (req, res) => {
         try {
           const rr = await pool.query(
             `SELECT pref32, pref17, bouchons, ctn_c12, ctn_c24,
-                    hilio_rebut, sachets_hilio,
+                    hilio_rebut,
                     COALESCE(etiq_c12,0) AS etiq_c12,
-                    COALESCE(etiq_c24,0) AS etiq_c24,
-                    COALESCE(etiq_c12,0) AS etiq_c12, COALESCE(etiq_c24,0) AS etiq_c24
+                    COALESCE(etiq_c24,0) AS etiq_c24
              FROM rebuts WHERE production_id = $1`, [pj.id]
           );
           if (rr.rows[0]) {
             const rb = rr.rows[0];
             rebuts = {
-              pref32:       parseInt(rb.pref32)       || 0,
-              pref17:       parseInt(rb.pref17)       || 0,
-              bouchons:     parseInt(rb.bouchons)     || 0,
-              ctn_c12:      parseInt(rb.ctn_c12)      || 0,
-              ctn_c24:      parseInt(rb.ctn_c24)      || 0,
-              hilio_rebut:  parseInt(rb.hilio_rebut)  || 0,
-              sachets_hilio:parseInt(rb.sachets_hilio)|| 0,
-              // etiq_c12 et etiq_c24 séparées — fallback sur etiquettes si pas encore migrées
-              etiq_c12: parseInt(rb.etiq_c12) || Math.round((parseInt(rb.etiq_c12||0)+parseInt(rb.etiq_c24||0))/2),
-              etiq_c24: parseInt(rb.etiq_c24) || Math.round((parseInt(rb.etiq_c12||0)+parseInt(rb.etiq_c24||0))/2),
+              pref32:   parseInt(rb.pref32)      || 0,
+              pref17:   parseInt(rb.pref17)      || 0,
+              bouchons: parseInt(rb.bouchons)    || 0,
+              ctn_c12:  parseInt(rb.ctn_c12)     || 0,
+              ctn_c24:  parseInt(rb.ctn_c24)     || 0,
+              hilio:    parseInt(rb.hilio_rebut) || 0,
+              etiq_c12: parseInt(rb.etiq_c12)    || 0,
+              etiq_c24: parseInt(rb.etiq_c24)    || 0,
             };
           }
         } catch(e) { console.error('[RAPPORT] rebuts:', e.message); }
@@ -126,7 +123,7 @@ router.post('/generer', auth, async (req, res) => {
         rebCum.BOUCH_VERT    = (rebCum.BOUCH_VERT    ||0)+rb.bouchons;
         rebCum.CTN_15L       = (rebCum.CTN_15L       ||0)+rb.ctn_c12;
         rebCum.CTN_05L       = (rebCum.CTN_05L       ||0)+rb.ctn_c24;
-        rebCum.SACHETS_HILIO = (rebCum.SACHETS_HILIO ||0)+rb.sachets_hilio;
+        rebCum.HILIO_R       = (rebCum.HILIO_R       ||0)+rb.hilio;
         rebCum.ETI_15L       = (rebCum.ETI_15L       ||0)+rb.etiq_c12;  // Étiq C12 (1,5L)
         rebCum.ETI_05L       = (rebCum.ETI_05L       ||0)+rb.etiq_c24;  // Étiq C24 (0,5L)
       });
@@ -140,7 +137,7 @@ router.post('/generer', auth, async (req, res) => {
         { date:s.date_production, intrant:'Bouchons',            quantite:s.rebuts.bouchons,      prix:5,   valeur:s.rebuts.bouchons*5       },
         { date:s.date_production, intrant:'Cartons C12',         quantite:s.rebuts.ctn_c12,       prix:233, valeur:s.rebuts.ctn_c12*233      },
         { date:s.date_production, intrant:'Cartons C24',         quantite:s.rebuts.ctn_c24,       prix:200, valeur:s.rebuts.ctn_c24*200      },
-        { date:s.date_production, intrant:'Sachets HILIO',       quantite:s.rebuts.sachets_hilio, prix:24153,valeur:s.rebuts.sachets_hilio*24153 },
+        { date:s.date_production, intrant:'Sachets HILIO',       quantite:s.rebuts.hilio,    prix:0, valeur:0 },
         { date:s.date_production, intrant:'Étiquettes C12 1,5L', quantite:s.rebuts.etiq_c12,      prix:9,   valeur:s.rebuts.etiq_c12*9       },
         { date:s.date_production, intrant:'Étiquettes C24 0,5L', quantite:s.rebuts.etiq_c24,      prix:6,   valeur:s.rebuts.etiq_c24*6       },
       ]).filter(r => r.quantite > 0);
