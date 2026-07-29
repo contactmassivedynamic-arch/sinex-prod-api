@@ -1,4 +1,3 @@
-// Charger dotenv uniquement en développement
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -14,16 +13,16 @@ const app = express();
 app.use(helmet());
 app.use(morgan('dev'));
 
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  'http://localhost:3000',
-  'https://sinex-prod-front.vercel.app',
-].filter(Boolean);
-
 app.use(cors({
   origin: (origin, cb) => {
-    if (!origin || allowedOrigins.some(o => origin.startsWith(o))) cb(null, true);
-    else cb(new Error('CORS non autorisé'));
+    if (!origin) return cb(null, true);
+    if (
+      origin.includes('vercel.app') ||
+      origin.includes('railway.app') ||
+      origin.includes('localhost')
+    ) return cb(null, true);
+    console.error('[CORS] Origine refusée:', origin);
+    cb(new Error('CORS non autorisé'));
   },
   credentials: true,
 }));
@@ -38,8 +37,8 @@ app.use('/api/stocks',       require('./routes/stocks'));
 app.use('/api/tresorerie',   require('./routes/tresorerie'));
 app.use('/api/dashboard',    require('./routes/dashboard'));
 app.use('/api/atp',          require('./routes/atp'));
-app.use('/api/credits',       require('./routes/credits'));
-app.use('/api/email',         require('./routes/email'));
+app.use('/api/credits',      require('./routes/credits'));
+app.use('/api/email',        require('./routes/email'));
 app.use('/api/rapports',     require('./routes/rapports'));
 app.use('/api/referentiels', require('./routes/referentiels'));
 app.use('/api/import',       require('./routes/import'));
@@ -49,7 +48,6 @@ app.get('/api/health', async (req, res) => {
     await pool.query('SELECT 1');
     res.json({ status: 'ok', db: 'connectée', env: process.env.NODE_ENV, timestamp: new Date() });
   } catch (err) {
-    console.error('[HEALTH] DB error:', err.message);
     res.status(503).json({ status: 'error', db: 'déconnectée', error: err.message });
   }
 });
