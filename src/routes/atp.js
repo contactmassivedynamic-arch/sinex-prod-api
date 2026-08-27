@@ -177,4 +177,26 @@ router.post('/previsions', auth, role(DG), async (req, res) => {
   } finally { client.release(); }
 });
 
+// POST /api/atp/cdhtr — CDHTR saisi manuellement (réalisation)
+router.post('/cdhtr', auth, role(DG), async (req, res) => {
+  try {
+    const { mois, cdhtr } = req.body;
+    const CDHTR = parseFloat(cdhtr || 0);
+    const r = await pool.query(
+      `UPDATE atp SET real_cd_ht=$1 WHERE periode=$2 RETURNING id`,
+      [CDHTR, mois]
+    );
+    if (r.rowCount===0) {
+      await pool.query(
+        `INSERT INTO atp (periode,statut,real_cd_ht) VALUES ($1,'en_cours',$2)`,
+        [mois, CDHTR]
+      );
+    }
+    res.json({message:'CDHTR enregistré ✓', CDHTR});
+  } catch(err) {
+    console.error('[ATP CDHTR]', err.message);
+    res.status(500).json({message:err.message});
+  }
+});
+
 module.exports = router;
